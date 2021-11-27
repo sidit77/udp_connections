@@ -11,17 +11,20 @@ fn client() {
 
     let mut buffer = [0u8; udpcon::MAX_PAYLOAD_SIZE];
     let mut i = 0u32;
-    loop {
-        if let Some(event) = socket.next_event(&mut buffer).unwrap() {
-            match event {
-                ClientEvent::Connected(id) => println!("Client connected as {}", id),
-                ClientEvent::Disconnected(reason) => {
-                    println!("Client disconnected: {:?}", reason);
-                    break
-                },
-                ClientEvent::Packet(size) => {
-                    let payload = &buffer[..size];
-                    println!("Got packet: {:?}", payload);
+    'outer: loop {
+        loop {
+            match socket.next_event(&mut buffer).unwrap() {
+                None => break,
+                Some(event) => match event {
+                    ClientEvent::Connected(id) => println!("Client connected as {}", id),
+                    ClientEvent::Disconnected(reason) => {
+                        println ! ("Client disconnected: {:?}", reason);
+                        break 'outer
+                    },
+                    ClientEvent::Packet(size) => {
+                        let payload = & buffer[..size];
+                        println ! ("Got packet: {:?}", payload);
+                    }
                 }
             }
         }
@@ -45,14 +48,19 @@ fn main(){
 
     let mut buffer = [0u8; udpcon::MAX_PAYLOAD_SIZE];
     loop {
-        if let Some(event) = socket.next_event(&mut buffer).unwrap() {
-            match event {
-                ServerEvent::ClientConnected(client_id) => println!("Client {} connected", client_id),
-                ServerEvent::ClientDisconnected(client_id, reason) => println!("Client {} disconnected: {:?}", client_id, reason),
-                ServerEvent::Packet(client_id, size) => {
-                    let payload = &buffer[..size];
-                    println!("Got packet: {:?} from {}", payload, client_id);
-                    socket.send(client_id, payload).unwrap();
+        loop {
+            match socket.next_event(&mut buffer).unwrap() {
+                None => break,
+                Some(event) => match event {
+                    ServerEvent::ClientConnected(client_id) =>
+                        println!("Client {} connected", client_id),
+                    ServerEvent::ClientDisconnected(client_id, reason) =>
+                        println!("Client {} disconnected: {:?}", client_id, reason),
+                    ServerEvent::Packet(client_id, size) => {
+                        let payload = &buffer[..size];
+                        println!("Got packet: {:?} from {}", payload, client_id);
+                        socket.send(client_id, payload).unwrap();
+                    }
                 }
             }
         }
