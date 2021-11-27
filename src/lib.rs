@@ -1,5 +1,7 @@
+mod protocol;
+
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
-use std::io::Result;
+use std::io::{ErrorKind, Result};
 
 pub const MAX_PACKET_SIZE: usize = 1500;
 pub const HEADER_SIZE: usize = 0;
@@ -51,7 +53,15 @@ impl UdpClient {
     }
 
     pub fn next_event(&mut self, payload: &mut [u8]) -> Result<Option<ClientEvent>> {
-        Ok(None)
+        let mut buffer = [0u8; MAX_PACKET_SIZE];
+        match self.socket.recv_from(&mut buffer) {
+            Ok((size, src)) => {
+                let mut packet = &mut buffer[..size];
+                Ok(None)
+            }
+            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock) => Ok(None),
+            Err(e) => Err(e)
+        }
     }
 
     pub fn send(&mut self, payload: &mut [u8]) -> Result<()> {
@@ -102,3 +112,4 @@ impl UdpServer {
     }
 
 }
+
