@@ -12,14 +12,14 @@ fn assert(v: bool, reason: &str) -> Result<()> {
 }
 
 #[derive(Debug, PartialEq)]
-enum ClientProtocol<'a> {
+pub(crate) enum ClientProtocol<'a> {
     ConnectionRequest,
     Payload(&'a [u8])
 }
 
 impl<'a> ClientProtocol<'a> {
 
-    fn from(data: &'a [u8]) -> Result<Self> {
+    pub(crate) fn from(data: &'a [u8]) -> Result<Self> {
         let mut data = data;
         assert(data.read_u32::<NetworkEndian>()? == PROTOCOL_ID, "bad protocol id")?;
         match data.read_u8()? {
@@ -29,7 +29,7 @@ impl<'a> ClientProtocol<'a> {
         }
     }
 
-    fn write<'b>(&self, data: &'b mut [u8]) -> Result<&'b [u8]> {
+    pub(crate) fn write<'b>(&self, data: &'b mut [u8]) -> Result<&'b [u8]> {
         let mut data = Cursor::new(data);
         data.write_u32::<NetworkEndian>(PROTOCOL_ID)?;
         match self {
@@ -48,7 +48,7 @@ impl<'a> ClientProtocol<'a> {
 }
 
 #[derive(Debug, PartialEq)]
-enum ServerProtocol<'a> {
+pub(crate) enum ServerProtocol<'a> {
     ConnectionAccepted,
     ConnectionDenied,
     Payload(&'a [u8])
@@ -56,7 +56,7 @@ enum ServerProtocol<'a> {
 
 impl<'a> ServerProtocol<'a> {
 
-    fn from(data: &'a [u8]) -> Result<Self> {
+    pub(crate) fn from(data: &'a [u8]) -> Result<Self> {
         let mut data = data;
         assert(data.read_u32::<NetworkEndian>()? == PROTOCOL_ID, "bad protocol id")?;
         match data.read_u8()? {
@@ -67,7 +67,7 @@ impl<'a> ServerProtocol<'a> {
         }
     }
 
-    fn write<'b>(&self, data: &'b mut [u8]) -> Result<&'b [u8]> {
+    pub(crate) fn write<'b>(&self, data: &'b mut [u8]) -> Result<&'b [u8]> {
         let mut data = Cursor::new(data);
         data.write_u32::<NetworkEndian>(PROTOCOL_ID)?;
         match self {
