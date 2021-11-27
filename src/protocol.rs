@@ -1,5 +1,6 @@
 use std::io::{Cursor, Error, ErrorKind, Result, Write};
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
+use crc32fast::Hasher;
 
 const PROTOCOL_ID: u32 = 850394;
 
@@ -21,7 +22,11 @@ impl<'a> ClientProtocol<'a> {
 
     pub(crate) fn from(data: &'a [u8]) -> Result<Self> {
         let mut data = data;
-        assert(data.read_u32::<NetworkEndian>()? == PROTOCOL_ID, "bad protocol id")?;
+        let checksum = data.read_u32::<NetworkEndian>()?;
+        let mut hasher = Hasher::new();
+        hasher.update(&PROTOCOL_ID.to_be_bytes());
+        hasher.update(data);
+        assert(checksum == hasher.finalize(), "bad checksum")?;
         match data.read_u8()? {
             0x00 => Ok(ClientProtocol::ConnectionRequest),
             0x01 => Ok(ClientProtocol::Payload(data)),
@@ -31,7 +36,7 @@ impl<'a> ClientProtocol<'a> {
 
     pub(crate) fn write<'b>(&self, data: &'b mut [u8]) -> Result<&'b [u8]> {
         let mut data = Cursor::new(data);
-        data.write_u32::<NetworkEndian>(PROTOCOL_ID)?;
+        data.write_all(&PROTOCOL_ID.to_be_bytes())?;
         match self {
             ClientProtocol::ConnectionRequest => {
                 data.write_u8(0x00)?
@@ -42,6 +47,10 @@ impl<'a> ClientProtocol<'a> {
             }
         }
         let len = data.position() as usize;
+        let mut hasher = Hasher::new();
+        hasher.update(&data.get_ref()[..len]);
+        data.set_position(0);
+        data.write_u32::<NetworkEndian>(hasher.finalize())?;
         Ok(&data.into_inner()[..len])
     }
 
@@ -58,7 +67,11 @@ impl<'a> ServerProtocol<'a> {
 
     pub(crate) fn from(data: &'a [u8]) -> Result<Self> {
         let mut data = data;
-        assert(data.read_u32::<NetworkEndian>()? == PROTOCOL_ID, "bad protocol id")?;
+        let checksum = data.read_u32::<NetworkEndian>()?;
+        let mut hasher = Hasher::new();
+        hasher.update(&PROTOCOL_ID.to_be_bytes());
+        hasher.update(data);
+        assert(checksum == hasher.finalize(), "bad checksum")?;
         match data.read_u8()? {
             0x00 => Ok(ServerProtocol::ConnectionAccepted(data.read_u16::<NetworkEndian>()?)),
             0x01 => Ok(ServerProtocol::ConnectionDenied),
@@ -69,7 +82,7 @@ impl<'a> ServerProtocol<'a> {
 
     pub(crate) fn write<'b>(&self, data: &'b mut [u8]) -> Result<&'b [u8]> {
         let mut data = Cursor::new(data);
-        data.write_u32::<NetworkEndian>(PROTOCOL_ID)?;
+        data.write_all(&PROTOCOL_ID.to_be_bytes())?;
         match *self {
             ServerProtocol::ConnectionAccepted(id) => {
                 data.write_u8(0x00)?;
@@ -84,6 +97,10 @@ impl<'a> ServerProtocol<'a> {
             }
         }
         let len = data.position() as usize;
+        let mut hasher = Hasher::new();
+        hasher.update(&data.get_ref()[..len]);
+        data.set_position(0);
+        data.write_u32::<NetworkEndian>(hasher.finalize())?;
         Ok(&data.into_inner()[..len])
     }
 
@@ -112,6 +129,17 @@ mod tests {
     }
 
     #[test]
+    #[should_panic]
+    fn test_client_protocol_crc() {
+        let mut buffer = [0u8; 10];
+        let test = ClientProtocol::ConnectionRequest;
+        let len = test.write(&mut buffer).unwrap().len();
+        let bin= &mut buffer[..len];
+        bin[4] += 1;
+        ClientProtocol::from(bin).unwrap();
+    }
+
+    #[test]
     fn test_server_protocol() {
         let mut buffer = [0u8; 10];
 
@@ -128,5 +156,16 @@ mod tests {
             assert_eq!(test, rev);
             println!("ok")
         }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_server_protocol_crc() {
+        let mut buffer = [0u8; 10];
+        let test = ServerProtocol::ConnectionDenied;
+        let len = test.write(&mut buffer).unwrap().len();
+        let bin= &mut buffer[..len];
+        bin[4] += 1;
+        ServerProtocol::from(bin).unwrap();
     }
 }
