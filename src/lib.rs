@@ -17,7 +17,7 @@ pub enum DisconnectReason {
 
 #[derive(Debug, Copy, Clone)]
 pub enum ClientEvent {
-    Connected,
+    Connected(u16),
     Disconnected(DisconnectReason),
     Packet(usize)
 }
@@ -92,9 +92,9 @@ impl UdpClient {
             Ok((size, src)) => match acceptable(src) {
                 true => match self.state {
                     ClientState::Connecting(_) => match ServerProtocol::from(&buffer[..size]){
-                        Ok(ServerProtocol::ConnectionAccepted) => {
+                        Ok(ServerProtocol::ConnectionAccepted(id)) => {
                             self.state = ClientState::Connected(src);
-                            Ok(Some(ClientEvent::Connected))
+                            Ok(Some(ClientEvent::Connected(id)))
                         },
                         Ok(ServerProtocol::ConnectionDenied) => {
                             self.state = ClientState::Disconnected;
@@ -133,9 +133,9 @@ impl UdpClient {
 
 #[derive(Debug, Copy, Clone)]
 pub enum ServerEvent {
-    ClientConnected(u64),
-    ClientDisconnected(u64, DisconnectReason),
-    Packet(u64, usize)
+    ClientConnected(u16),
+    ClientDisconnected(u16, DisconnectReason),
+    Packet(u16, usize)
 }
 
 #[derive(Debug)]
@@ -146,10 +146,10 @@ pub struct UdpServer {
 
 impl UdpServer {
 
-    pub fn listen<A: ToSocketAddrs>(address: A, max_clients: usize) -> Result<Self> {
+    pub fn listen<A: ToSocketAddrs>(address: A, max_clients: u16) -> Result<Self> {
         let socket = UdpSocket::bind(address)?;
         socket.set_nonblocking(true)?;
-        let clients = vec![None; max_clients].into_boxed_slice();
+        let clients = vec![None; max_clients as usize].into_boxed_slice();
         Ok(Self {
             socket,
             clients
@@ -173,12 +173,12 @@ impl UdpServer {
                         },
                         Some(id) => {
                             self.clients[id as usize] = Some(src);
-                            self.socket.send_to(ServerProtocol::ConnectionAccepted.write(&mut buffer)?, src)?;
+                            self.socket.send_to(ServerProtocol::ConnectionAccepted(id).write(&mut buffer)?, src)?;
                             Ok(Some(ServerEvent::ClientConnected(id)))
                         }
                     },
-                    Some(_) => {
-                        self.socket.send_to(ServerProtocol::ConnectionAccepted.write(&mut buffer)?, src)?;
+                    Some(id) => {
+                        self.socket.send_to(ServerProtocol::ConnectionAccepted(id).write(&mut buffer)?, src)?;
                         self.next_event(payload)
                     }
                 },
@@ -196,27 +196,27 @@ impl UdpServer {
         }
     }
 
-    fn get_client_id(&self, addr: SocketAddr) -> Option<u64> {
+    fn get_client_id(&self, addr: SocketAddr) -> Option<u16> {
         self.clients
             .iter()
             .enumerate()
             .find_map(|(i, c) | c
                 .filter(|a| *a == addr)
-                .map(|_| i as u64))
+                .map(|_| i as u16))
     }
 
-    fn get_free_client_id(&self) -> Option<u64> {
+    fn get_free_client_id(&self) -> Option<u16> {
         self.clients
             .iter()
             .enumerate()
             .find_map(|(i, c) | match c {
-                None => Some(i as u64),
+                None => Some(i as u16),
                 Some(_) => None
             })
     }
 
-    pub fn send(&mut self, client_id: u64, payload: &[u8]) -> Result<()> {
-        assert!(client_id < self.clients.len() as u64);
+    pub fn send(&mut self, client_id: u16, payload: &[u8]) -> Result<()> {
+        assert!((client_id as usize) < self.clients.len());
         match self.clients[client_id as usize] {
             Some(addr) => {
                 let mut buffer = [0u8; MAX_PACKET_SIZE];
@@ -227,7 +227,7 @@ impl UdpServer {
         }
     }
 
-    pub fn disconnect(&mut self, _client_id: u64) -> Result<()> {
+    pub fn disconnect(&mut self, _client_id: u16) -> Result<()> {
         unimplemented!()
     }
 

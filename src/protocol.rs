@@ -49,7 +49,7 @@ impl<'a> ClientProtocol<'a> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum ServerProtocol<'a> {
-    ConnectionAccepted,
+    ConnectionAccepted(u16),
     ConnectionDenied,
     Payload(&'a [u8])
 }
@@ -60,7 +60,7 @@ impl<'a> ServerProtocol<'a> {
         let mut data = data;
         assert(data.read_u32::<NetworkEndian>()? == PROTOCOL_ID, "bad protocol id")?;
         match data.read_u8()? {
-            0x00 => Ok(ServerProtocol::ConnectionAccepted),
+            0x00 => Ok(ServerProtocol::ConnectionAccepted(data.read_u16::<NetworkEndian>()?)),
             0x01 => Ok(ServerProtocol::ConnectionDenied),
             0x02 => Ok(ServerProtocol::Payload(data)),
             _ => Err(Error::new(ErrorKind::InvalidData, "Invalid packet id"))
@@ -70,12 +70,13 @@ impl<'a> ServerProtocol<'a> {
     pub(crate) fn write<'b>(&self, data: &'b mut [u8]) -> Result<&'b [u8]> {
         let mut data = Cursor::new(data);
         data.write_u32::<NetworkEndian>(PROTOCOL_ID)?;
-        match self {
-            ServerProtocol::ConnectionAccepted => {
-                data.write_u8(0x00)?
+        match *self {
+            ServerProtocol::ConnectionAccepted(id) => {
+                data.write_u8(0x00)?;
+                data.write_u16::<NetworkEndian>(id)?
             },
             ServerProtocol::ConnectionDenied => {
-                data.write_u8(0x01)?
+                data.write_u8(0x01)?;
             },
             ServerProtocol::Payload(payload) => {
                 data.write_u8(0x02)?;
@@ -115,7 +116,7 @@ mod tests {
         let mut buffer = [0u8; 10];
 
         let test_cases = [
-            ServerProtocol::ConnectionAccepted,
+            ServerProtocol::ConnectionAccepted(3),
             ServerProtocol::ConnectionDenied,
             ServerProtocol::Payload(&[1,2,3])
         ];

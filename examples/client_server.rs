@@ -14,7 +14,7 @@ fn client() {
     loop {
         if let Some(event) = socket.next_event(&mut buffer).unwrap() {
             match event {
-                ClientEvent::Connected => println!("Client connected"),
+                ClientEvent::Connected(id) => println!("Client connected as {}", id),
                 ClientEvent::Disconnected(reason) => {
                     println!("Client disconnected: {:?}", reason);
                     break
