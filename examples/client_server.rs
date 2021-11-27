@@ -10,17 +10,29 @@ fn client() {
     socket.connect(SERVER).unwrap();
 
     let mut buffer = [0u8; udpcon::MAX_PAYLOAD_SIZE];
+    let mut i = 0u32;
     loop {
         if let Some(event) = socket.next_event(&mut buffer).unwrap() {
             match event {
                 ClientEvent::Connected => println!("Client connected"),
-                ClientEvent::Disconnected(reason) => println!("Client disconnected: {:?}", reason),
+                ClientEvent::Disconnected(reason) => {
+                    println!("Client disconnected: {:?}", reason);
+                    break
+                },
                 ClientEvent::Packet(size) => {
                     let payload = &buffer[..size];
-                    println!("Get packet: {:?}", payload);
+                    println!("Got packet: {:?}", payload);
                 }
             }
         }
+
+        if socket.is_connected() {
+            if i % 10 == 0 {
+                socket.send(&i.to_be_bytes()).unwrap();
+            }
+            i += 1;
+        }
+
         std::thread::sleep(Duration::from_secs_f32(0.05));
     }
 
@@ -29,7 +41,6 @@ fn client() {
 
 fn main(){
     let _ = std::thread::spawn(self::client);
-
     let mut socket = UdpServer::listen(SERVER, 5).unwrap();
 
     let mut buffer = [0u8; udpcon::MAX_PAYLOAD_SIZE];
@@ -40,7 +51,8 @@ fn main(){
                 ServerEvent::ClientDisconnected(client_id, reason) => println!("Client {} disconnected: {:?}", client_id, reason),
                 ServerEvent::Packet(client_id, size) => {
                     let payload = &buffer[..size];
-                    println!("Get packet: {:?} from {}", payload, client_id);
+                    println!("Got packet: {:?} from {}", payload, client_id);
+                    socket.send(client_id, payload).unwrap();
                 }
             }
         }

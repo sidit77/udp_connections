@@ -52,6 +52,10 @@ impl UdpClient {
         self.socket.local_addr()
     }
 
+    pub fn is_connected(&self) -> bool {
+        matches!(self.state, ClientState::Connected(_))
+    }
+
     pub fn connect<A: ToSocketAddrs>(&mut self, address: A) -> Result<()> {
         match address.to_socket_addrs()?.next() {
             Some(addr) => {
@@ -63,7 +67,7 @@ impl UdpClient {
     }
 
     pub fn disconnect(&mut self) -> Result<()> {
-        Ok(())
+        unimplemented!()
     }
 
     pub fn next_event(&mut self, payload: &mut [u8]) -> Result<Option<ClientEvent>> {
@@ -114,8 +118,15 @@ impl UdpClient {
         }
     }
 
-    pub fn send(&mut self, _payload: &mut [u8]) -> Result<()> {
-        Ok(())
+    pub fn send(&mut self, payload: &[u8]) -> Result<()> {
+        match self.state {
+            ClientState::Connected(addr) => {
+                let mut buffer = [0u8; MAX_PACKET_SIZE];
+                self.socket.send_to(ClientProtocol::Payload(payload).write(&mut buffer)?, addr)?;
+                Ok(())
+            },
+            _ => Err(Error::new(ErrorKind::NotConnected, "not connect to a server"))
+        }
     }
 
 }
@@ -166,7 +177,7 @@ impl UdpServer {
                             Ok(Some(ServerEvent::ClientConnected(id)))
                         }
                     },
-                    Some(id) => {
+                    Some(_) => {
                         self.socket.send_to(ServerProtocol::ConnectionAccepted.write(&mut buffer)?, src)?;
                         self.next_event(payload)
                     }
@@ -204,12 +215,20 @@ impl UdpServer {
             })
     }
 
-    pub fn send(&mut self, _client_id: u64, _payload: &mut [u8]) -> Result<()> {
-        Ok(())
+    pub fn send(&mut self, client_id: u64, payload: &[u8]) -> Result<()> {
+        assert!(client_id < self.clients.len() as u64);
+        match self.clients[client_id as usize] {
+            Some(addr) => {
+                let mut buffer = [0u8; MAX_PACKET_SIZE];
+                self.socket.send_to(ServerProtocol::Payload(payload).write(&mut buffer)?, addr)?;
+                Ok(())
+            },
+            None => Err(Error::new(ErrorKind::NotConnected, "client not connected"))
+        }
     }
 
     pub fn disconnect(&mut self, _client_id: u64) -> Result<()> {
-        Ok(())
+        unimplemented!()
     }
 
 }
