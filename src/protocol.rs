@@ -15,6 +15,7 @@ fn assert(v: bool, reason: &str) -> Result<()> {
 #[derive(Debug, PartialEq)]
 pub(crate) enum ClientProtocol<'a> {
     ConnectionRequest,
+    Disconnect,
     Payload(&'a [u8])
 }
 
@@ -29,7 +30,8 @@ impl<'a> ClientProtocol<'a> {
         assert(checksum == hasher.finalize(), "bad checksum")?;
         match data.read_u8()? {
             0x00 => Ok(ClientProtocol::ConnectionRequest),
-            0x01 => Ok(ClientProtocol::Payload(data)),
+            0x01 => Ok(ClientProtocol::Disconnect),
+            0x02 => Ok(ClientProtocol::Payload(data)),
             _ => Err(Error::new(ErrorKind::InvalidData, "Invalid packet id"))
         }
     }
@@ -41,8 +43,11 @@ impl<'a> ClientProtocol<'a> {
             ClientProtocol::ConnectionRequest => {
                 data.write_u8(0x00)?
             },
+            ClientProtocol::Disconnect => {
+                data.write_u8(0x01)?
+            },
             ClientProtocol::Payload(payload) => {
-                data.write_u8(0x01)?;
+                data.write_u8(0x02)?;
                 data.write_all(payload)?;
             }
         }
@@ -60,6 +65,7 @@ impl<'a> ClientProtocol<'a> {
 pub(crate) enum ServerProtocol<'a> {
     ConnectionAccepted(u16),
     ConnectionDenied,
+    Disconnect,
     Payload(&'a [u8])
 }
 
@@ -75,7 +81,8 @@ impl<'a> ServerProtocol<'a> {
         match data.read_u8()? {
             0x00 => Ok(ServerProtocol::ConnectionAccepted(data.read_u16::<NetworkEndian>()?)),
             0x01 => Ok(ServerProtocol::ConnectionDenied),
-            0x02 => Ok(ServerProtocol::Payload(data)),
+            0x02 => Ok(ServerProtocol::Disconnect),
+            0x03 => Ok(ServerProtocol::Payload(data)),
             _ => Err(Error::new(ErrorKind::InvalidData, "Invalid packet id"))
         }
     }
@@ -91,8 +98,11 @@ impl<'a> ServerProtocol<'a> {
             ServerProtocol::ConnectionDenied => {
                 data.write_u8(0x01)?;
             },
-            ServerProtocol::Payload(payload) => {
+            ServerProtocol::Disconnect => {
                 data.write_u8(0x02)?;
+            },
+            ServerProtocol::Payload(payload) => {
+                data.write_u8(0x03)?;
                 data.write_all(payload)?;
             }
         }
@@ -116,6 +126,7 @@ mod tests {
 
         let test_cases = [
             ClientProtocol::ConnectionRequest,
+            ClientProtocol::Disconnect,
             ClientProtocol::Payload(&[1,2,3])
         ];
 
@@ -146,6 +157,7 @@ mod tests {
         let test_cases = [
             ServerProtocol::ConnectionAccepted(3),
             ServerProtocol::ConnectionDenied,
+            ServerProtocol::Disconnect,
             ServerProtocol::Payload(&[1,2,3])
         ];
 
