@@ -2,6 +2,7 @@ mod protocol;
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
 use std::io::{Error, ErrorKind, Result};
+use std::slice::{Iter, IterMut};
 use std::time::{Duration, Instant};
 use crate::protocol::{ClientProtocol, ServerProtocol};
 
@@ -161,10 +162,68 @@ struct VirtualConnection {
     last_received_packet: Instant
 }
 
+impl VirtualConnection {
+    fn new(addrs: SocketAddr, id: u16) -> Self {
+        Self {
+            addrs,
+            id,
+            last_received_packet: Instant::now()
+        }
+    }
+
+    fn send(&self, socket: &UdpSocket, packet: ServerProtocol) -> Result<()> {
+        let mut buffer = [0u8; MAX_PACKET_SIZE];
+        socket.send_to(packet.write(&mut buffer)?, self.addrs)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct ConnectionManager(Box<[Option<VirtualConnection>]>);
+
+impl ConnectionManager {
+
+    fn new(max_clients: u16) -> Self{
+        Self {
+            0:  vec![None; max_clients as usize].into_boxed_slice()
+        }
+    }
+
+    fn get(&self, id: u16) -> Option<&VirtualConnection> {
+        self.0.get(id as usize).unwrap_or(&None).as_ref()
+    }
+
+    fn find_by_addrs(&mut self, addrs: SocketAddr) -> Option<&mut VirtualConnection> {
+        self.iter_mut()
+            .filter_map(|c|c.as_mut())
+            .find(|c|c.addrs == addrs)
+    }
+
+    fn create_new_connection(&mut self, addrs: SocketAddr) -> Option<&mut VirtualConnection> {
+        self.iter_mut()
+            .enumerate()
+            .find(|(_, c)|c.is_none())
+            .map(|(id, c)| {
+                *c = Some(VirtualConnection::new(addrs, id as u16));
+                c.as_mut().unwrap()
+            })
+    }
+
+    fn iter(&self) -> Iter<'_, Option<VirtualConnection>> {
+        self.0.iter()
+    }
+
+    fn iter_mut(&mut self) -> IterMut<'_, Option<VirtualConnection>> {
+        self.0.iter_mut()
+    }
+
+}
+
+
 #[derive(Debug)]
 pub struct UdpServer {
     socket: UdpSocket,
-    clients: Box<[Option<VirtualConnection>]>
+    clients: ConnectionManager
 }
 
 impl UdpServer {
@@ -172,7 +231,7 @@ impl UdpServer {
     pub fn listen<A: ToSocketAddrs>(address: A, max_clients: u16) -> Result<Self> {
         let socket = UdpSocket::bind(address)?;
         socket.set_nonblocking(true)?;
-        let clients = vec![None; max_clients as usize].into_boxed_slice();
+        let clients = ConnectionManager::new(max_clients);
         Ok(Self {
             socket,
             clients
@@ -199,30 +258,26 @@ impl UdpServer {
 
         match self.socket.recv_from(&mut buffer) {
             Ok((size, src)) => match ClientProtocol::from(&buffer[..size]) {
-                Ok(ClientProtocol::ConnectionRequest) => match self.get_client_connection_mut(src){
-                    None => match self.get_free_client_id() {
+                Ok(ClientProtocol::ConnectionRequest) => match self.clients.find_by_addrs(src){
+                    None => match self.clients.create_new_connection(src) {
                         None => {
-                            self.socket.send_to(ServerProtocol::ConnectionDenied.write(&mut buffer)?, src)?;
+                            let tmp = VirtualConnection::new(src, 0);
+                            tmp.send(&self.socket, ServerProtocol::ConnectionDenied)?;
                             self.next_event(payload)
                         },
-                        Some(id) => {
-                            self.clients[id as usize] = Some(VirtualConnection {
-                                addrs: src,
-                                id,
-                                last_received_packet: now
-                            });
-                            self.socket.send_to(ServerProtocol::ConnectionAccepted(id).write(&mut buffer)?, src)?;
-                            Ok(Some(ServerEvent::ClientConnected(id)))
+                        Some(conn) => {
+                            conn.send(&self.socket, ServerProtocol::ConnectionAccepted(conn.id))?;
+                            Ok(Some(ServerEvent::ClientConnected(conn.id)))
                         }
                     },
                     Some(conn) => {
                         conn.last_received_packet = now;
-                        let packet = ServerProtocol::ConnectionAccepted(conn.id).write(&mut buffer)?;
-                        self.socket.send_to(packet, src)?;
+                        let packet = ServerProtocol::ConnectionAccepted(conn.id);
+                        conn.send(&self.socket, packet)?;
                         self.next_event(payload)
                     }
                 },
-                Ok(ClientProtocol::Payload(data)) => match self.get_client_connection_mut(src) {
+                Ok(ClientProtocol::Payload(data)) => match self.clients.find_by_addrs(src) {
                     Some(conn) => {
                         payload[..data.len()].copy_from_slice(data);
                         conn.last_received_packet = now;
@@ -237,48 +292,22 @@ impl UdpServer {
         }
     }
 
-    fn get_client_connection_mut(&mut self, addrs: SocketAddr) -> Option<&mut VirtualConnection> {
-        self.clients
-            .iter_mut()
-            .find_map(|o| match o {
-                Some(v) if v.addrs == addrs => Some(v),
-                _ => None
-            })
-    }
-
-    fn get_free_client_id(&self) -> Option<u16> {
-        self.clients
-            .iter()
-            .enumerate()
-            .find_map(|(i, c) | match c {
-                None => Some(i as u16),
-                Some(_) => None
-            })
-    }
-
     pub fn connected_clients(&self) -> impl Iterator<Item=u16> +'_ {
         self.clients.iter().filter_map(|i|i.as_ref().map(|j|j.id))
     }
 
     pub fn broadcast(&mut self, payload: &[u8]) -> Result<()> {
-        let mut buffer = [0u8; MAX_PACKET_SIZE];
-        let packet = ServerProtocol::Payload(payload).write(&mut buffer)?;
         for client in self.clients.iter() {
             if let Some(conn) = client {
-                self.socket.send_to(packet, conn.addrs)?;
+                conn.send(&self.socket, ServerProtocol::Payload(payload))?;
             }
         }
         Ok(())
     }
 
     pub fn send(&mut self, client_id: u16, payload: &[u8]) -> Result<()> {
-        assert!((client_id as usize) < self.clients.len());
-        match &self.clients[client_id as usize] {
-            Some(conn) => {
-                let mut buffer = [0u8; MAX_PACKET_SIZE];
-                self.socket.send_to(ServerProtocol::Payload(payload).write(&mut buffer)?, conn.addrs)?;
-                Ok(())
-            },
+        match self.clients.get(client_id) {
+            Some(conn) => conn.send(&self.socket, ServerProtocol::Payload(payload)),
             None => Err(Error::new(ErrorKind::NotConnected, "client not connected"))
         }
     }
