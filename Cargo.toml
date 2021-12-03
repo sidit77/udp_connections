@@ -1,5 +1,8 @@
 [package]
 name = "udp_connections"
+repository = "https://github.com/sidit77/udp_connections"
+license = "MIT"
+readme = "README.md"
 version = "0.1.0"
 edition = "2021"
 
