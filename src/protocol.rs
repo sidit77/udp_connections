@@ -2,8 +2,6 @@ use std::io::{Cursor, Error, ErrorKind, Result, Write};
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
 use crc32fast::Hasher;
 
-const PROTOCOL_ID: u32 = 850394;
-
 fn assert(v: bool, reason: &str) -> Result<()> {
     if v {
         Ok(())
@@ -23,11 +21,11 @@ pub(crate) enum Packet<'a> {
 
 impl<'a> Packet<'a> {
 
-    pub(crate) fn from(data: &'a [u8]) -> Result<Self> {
+    pub(crate) fn from(data: &'a [u8], salt: &[u8]) -> Result<Self> {
         let mut data = data;
         let checksum = data.read_u32::<NetworkEndian>()?;
         let mut hasher = Hasher::new();
-        hasher.update(&PROTOCOL_ID.to_be_bytes());
+        hasher.update(salt);
         hasher.update(data);
         assert(checksum == hasher.finalize(), "bad checksum")?;
 
@@ -45,9 +43,10 @@ impl<'a> Packet<'a> {
         }
     }
 
-    pub(crate) fn write<'b>(&self, data: &'b mut [u8]) -> Result<&'b [u8]> {
+    pub(crate) fn write<'b>(&self, data: &'b mut [u8], salt: &[u8]) -> Result<&'b [u8]> {
         let mut data = Cursor::new(data);
-        data.write_all(&PROTOCOL_ID.to_be_bytes())?;
+        data.write_u32::<NetworkEndian>(0)?;
+        let len1 = data.position() as usize;
 
         match self {
             Packet::ConnectionRequest => {
@@ -69,12 +68,13 @@ impl<'a> Packet<'a> {
                 data.write_all(payload)?;
             }
         }
-        let len = data.position() as usize;
+        let len2 = data.position() as usize;
         let mut hasher = Hasher::new();
-        hasher.update(&data.get_ref()[..len]);
+        hasher.update(&salt);
+        hasher.update(&data.get_ref()[len1..len2]);
         data.set_position(0);
         data.write_u32::<NetworkEndian>(hasher.finalize())?;
-        Ok(&data.into_inner()[..len])
+        Ok(&data.into_inner()[..len2])
     }
 
 }
@@ -82,6 +82,8 @@ impl<'a> Packet<'a> {
 #[cfg(test)]
 mod tests {
     use crate::protocol::{Packet};
+
+    const SALT: [u8; 4] = 123456u32.to_be_bytes();
 
     #[test]
     fn test_packets() {
@@ -97,8 +99,8 @@ mod tests {
 
         for test in test_cases {
             print!("Testing {:?}: ", test);
-            let bin = test.write(&mut buffer).unwrap();
-            let rev = Packet::from(bin).unwrap();
+            let bin = test.write(&mut buffer, &SALT).unwrap();
+            let rev = Packet::from(bin, &SALT).unwrap();
             assert_eq!(test, rev);
             println!("ok")
         }
@@ -109,10 +111,10 @@ mod tests {
     fn test_packet_crc() {
         let mut buffer = [0u8; 10];
         let test = Packet::ConnectionRequest;
-        let len = test.write(&mut buffer).unwrap().len();
+        let len = test.write(&mut buffer,&SALT).unwrap().len();
         let bin= &mut buffer[..len];
         bin[4] += 1;
-        Packet::from(bin).unwrap();
+        Packet::from(bin,&SALT).unwrap();
     }
 
 }
