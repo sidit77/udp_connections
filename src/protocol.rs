@@ -36,7 +36,11 @@ impl<'a> Packet<'a> {
             0x01 => Ok(Packet::ConnectionAccepted(data.read_u16::<NetworkEndian>()?)),
             0x02 => Ok(Packet::ConnectionDenied),
             0x03 => Ok(Packet::Disconnect),
-            0x04 => Ok(Packet::Payload(data)),
+            0x04 => Ok(Packet::Payload({
+                let len = data.read_u16::<NetworkEndian>()? as usize;
+                assert(len == data.len(), "wrong packet size")?;
+                data
+            })),
             _ => Err(Error::new(ErrorKind::InvalidData, "Invalid packet id"))
         }
     }
@@ -61,6 +65,7 @@ impl<'a> Packet<'a> {
             },
             Packet::Payload(payload) => {
                 data.write_u8(0x04)?;
+                data.write_u16::<NetworkEndian>(payload.len() as u16)?;
                 data.write_all(payload)?;
             }
         }
