@@ -21,8 +21,7 @@ fn client() {
                     println ! ("{} Disconnected: {:?}", prefix, reason);
                     break 'outer
                 },
-                ClientEvent::Packet(size) => {
-                    let mut payload = &buffer[..size];
+                ClientEvent::Packet(mut payload) => {
                     let val = payload.read_u32::<BigEndian>().unwrap();
                     println ! ("{} Packet {}", prefix, val);
                 }
@@ -63,8 +62,7 @@ fn main(){
                     println!("{} Client {} connected", prefix, client_id),
                 ServerEvent::ClientDisconnected(client_id, reason) =>
                     println!("{} Client {} disconnected: {:?}", prefix, client_id, reason),
-                ServerEvent::Packet(client_id, size) => {
-                    let mut payload = &buffer[..size];
+                ServerEvent::Packet(client_id, mut payload) => {
                     let val = payload.read_u32::<BigEndian>().unwrap();
                     println!("{} Packet {} from {}", prefix, val, client_id);
                     socket.send(client_id, &val.to_be_bytes()).unwrap();

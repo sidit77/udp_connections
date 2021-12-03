@@ -19,10 +19,10 @@ pub enum DisconnectReason {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub enum ClientEvent {
+pub enum ClientEvent<'a> {
     Connected(u16),
     Disconnected(DisconnectReason),
-    Packet(usize)
+    Packet(&'a [u8])
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -92,6 +92,15 @@ impl UdpClient {
         self.socket.local_addr()
     }
 
+    pub fn remote_addr(&self) -> Option<SocketAddr> {
+        match self.state {
+            ClientState::Disconnected => None,
+            ClientState::Connecting(addrs, _) => Some(addrs),
+            ClientState::Connected(addrs, _) => Some(addrs),
+            ClientState::Disconnecting(addrs) => Some(addrs),
+        }
+    }
+
     pub fn is_connected(&self) -> bool {
         matches!(self.state, ClientState::Connected(_, _))
     }
@@ -109,6 +118,9 @@ impl UdpClient {
     pub fn disconnect(&mut self) -> Result<()> {
         match self.state {
             ClientState::Connected(addrs, _) => {
+                for _ in 0..10 {
+                    self.send_internal(Packet::Disconnect)?;
+                }
                 self.state = ClientState::Disconnecting(addrs);
                 Ok(())
             },
@@ -116,7 +128,7 @@ impl UdpClient {
         }
     }
 
-    pub fn next_event(&mut self, payload: &mut [u8]) -> Result<Option<ClientEvent>> {
+    pub fn next_event<'a>(&mut self, payload: &'a mut [u8]) -> Result<Option<ClientEvent<'a>>> {
         let now = Instant::now();
 
         match self.state {
@@ -135,65 +147,50 @@ impl UdpClient {
                 }
             },
             ClientState::Disconnecting(_) => {
-                for _ in 0..10 {
-                    self.send_internal(Packet::Disconnect)?;
-                }
                 self.state = ClientState::Disconnected;
                 return Ok(Some(ClientEvent::Disconnected(DisconnectReason::Disconnected)))
             }
             _ => {}
         }
 
-        let acceptable = |src| match self.state {
-            ClientState::Disconnected => false,
-            ClientState::Disconnecting(_) => false,
-            ClientState::Connecting(addr, _) => src == addr,
-            ClientState::Connected(addr, _) => src == addr,
-        };
-
         match self.socket.recv_from() {
-            Ok((packet, src)) => match acceptable(src) {
-                true => match &mut self.state {
-                    ClientState::Connecting(_, _) => match packet{
-                        Ok(Packet::ConnectionAccepted(id)) => {
-                            self.state = ClientState::Connected(src, now);
-                            Ok(Some(ClientEvent::Connected(id)))
-                        },
-                        Ok(Packet::ConnectionDenied) => {
-                            self.state = ClientState::Disconnected;
-                            Ok(Some(ClientEvent::Disconnected(DisconnectReason::ConnectionDenied)))
-                        }
-                        _ => self.next_event(payload)
-                    }
-                    ClientState::Connected(_, last_packet) => match packet{
-                        Ok(Packet::Payload(data)) => {
-                            payload[..data.len()].copy_from_slice(data);
-                            *last_packet = now;
-                            Ok(Some(ClientEvent::Packet(data.len())))
-                        },
-                        Ok(Packet::Disconnect) => {
-                            self.state = ClientState::Disconnected;
-                            Ok(Some(ClientEvent::Disconnected(DisconnectReason::Disconnected)))
-                        },
-                        _ => self.next_event(payload)
+            Ok((packet, src)) => match self.state {
+                ClientState::Connecting(remote, _) if remote == src => match packet{
+                    Ok(Packet::ConnectionAccepted(id)) => {
+                        self.state = ClientState::Connected(src, now);
+                        Ok(Some(ClientEvent::Connected(id)))
                     },
+                    Ok(Packet::ConnectionDenied) => {
+                        self.state = ClientState::Disconnected;
+                        Ok(Some(ClientEvent::Disconnected(DisconnectReason::ConnectionDenied)))
+                    }
                     _ => self.next_event(payload)
                 },
-                false => self.next_event(payload)
-            },
+                ClientState::Connected(remote, _) if remote == src => match packet{
+                    Ok(Packet::Payload(data)) => {
+                        let result = &mut payload[..data.len()];
+                        result.copy_from_slice(data);
+                        self.state = ClientState::Connected(remote, now);
+                        Ok(Some(ClientEvent::Packet(result)))
+                    },
+                    Ok(Packet::Disconnect) => {
+                        self.state = ClientState::Disconnected;
+                        Ok(Some(ClientEvent::Disconnected(DisconnectReason::Disconnected)))
+                    },
+                    _ => self.next_event(payload)
+                }
+                _ => self.next_event(payload)
+            }
             Err(e) if matches!(e.kind(), ErrorKind::WouldBlock) => Ok(None),
             Err(e) => Err(e)
         }
     }
 
     fn send_internal(&mut self, packet: Packet) -> Result<()> {
-        let _ = match self.state {
-            ClientState::Disconnected => Err(Error::new(ErrorKind::NotConnected, "not connected to a server")),
-            ClientState::Connecting(addrs, _) =>  self.socket.send_to(packet, addrs),
-            ClientState::Connected(addrs, _) => self.socket.send_to(packet, addrs),
-            ClientState::Disconnecting(addrs) => self.socket.send_to(packet, addrs),
-        }?;
-        Ok(())
+        match self.remote_addr() {
+            None => Err(Error::new(ErrorKind::NotConnected, "not connected to a server")),
+            Some(addrs) => self.socket.send_to(packet, addrs)
+        }
     }
 
     pub fn send(&mut self, payload: &[u8]) -> Result<()> {
@@ -206,10 +203,10 @@ impl UdpClient {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub enum ServerEvent {
+pub enum ServerEvent<'a> {
     ClientConnected(u16),
     ClientDisconnected(u16, DisconnectReason),
-    Packet(u16, usize)
+    Packet(u16, &'a [u8])
 }
 
 #[derive(Debug, Clone)]
@@ -311,7 +308,7 @@ impl UdpServer {
         self.socket.local_addr()
     }
 
-    pub fn next_event(&mut self, payload: &mut [u8]) -> Result<Option<ServerEvent>> {
+    pub fn next_event<'a>(&mut self, payload: &'a mut [u8]) -> Result<Option<ServerEvent<'a>>> {
         let now = Instant::now();
 
         {
@@ -319,7 +316,6 @@ impl UdpServer {
                 self.clients.iter_mut().find(|c|c.should_disconnect);
             if let Some(conn) = disconnect_client{
                 let id = conn.id;
-                for _ in 0..10 { self.socket.send_to(Packet::Disconnect, conn.addrs)? }
                 self.clients.disconnect(id);
                 return Ok(Some(ServerEvent::ClientDisconnected(id, DisconnectReason::Disconnected)))
             }
@@ -354,9 +350,10 @@ impl UdpServer {
                 },
                 Ok(Packet::Payload(data)) => match self.clients.find_by_addrs(src) {
                     Some(conn) => {
-                        payload[..data.len()].copy_from_slice(data);
+                        let result = &mut payload[..data.len()];
+                        result.copy_from_slice(data);
                         conn.last_received_packet = now;
-                        Ok(Some(ServerEvent::Packet(conn.id, data.len())))
+                        Ok(Some(ServerEvent::Packet(conn.id, result)))
                     },
                     None => self.next_event(payload)
                 },
@@ -396,6 +393,9 @@ impl UdpServer {
     pub fn disconnect(&mut self, client_id: u16) -> Result<()> {
         match self.clients.get_mut(client_id) {
             Some(conn) => {
+                for _ in 0..10 {
+                    self.socket.send_to(Packet::Disconnect, conn.addrs)?
+                }
                 conn.should_disconnect = true;
                 Ok(())
             },
