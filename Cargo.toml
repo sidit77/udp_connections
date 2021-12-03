@@ -1,5 +1,5 @@
 [package]
-name = "udpcon"
+name = "udp_connections"
 version = "0.1.0"
 edition = "2021"
 

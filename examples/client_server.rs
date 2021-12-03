@@ -1,6 +1,6 @@
 use std::time::Duration;
 use byteorder::{BigEndian, ReadBytesExt};
-use udpcon::{ClientEvent, ServerEvent, UdpClient, UdpServer};
+use udp_connections::{ClientEvent, MAX_PAYLOAD_SIZE, ServerEvent, UdpClient, UdpServer};
 
 const SERVER: &str = "127.0.0.1:23452";
 
@@ -11,7 +11,7 @@ fn client() {
     println!("{} starting up", prefix);
     socket.connect(SERVER).unwrap();
 
-    let mut buffer = [0u8; udpcon::MAX_PAYLOAD_SIZE];
+    let mut buffer = [0u8; MAX_PAYLOAD_SIZE];
     let mut i = 0u32;
     'outer: loop {
         while let Some(event) = socket.next_event(&mut buffer).unwrap() {
@@ -55,7 +55,7 @@ fn main(){
     let prefix = format!("[Server {}]", socket.local_addr().unwrap());
 
     //let mut i = 0u32;
-    let mut buffer = [0u8; udpcon::MAX_PAYLOAD_SIZE];
+    let mut buffer = [0u8; MAX_PAYLOAD_SIZE];
     loop {
         while let Some(event) = socket.next_event(&mut buffer).unwrap() {
             match event {
