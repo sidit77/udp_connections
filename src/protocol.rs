@@ -13,63 +13,15 @@ fn assert(v: bool, reason: &str) -> Result<()> {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum ClientProtocol<'a> {
+pub(crate) enum Packet<'a> {
     ConnectionRequest,
-    Disconnect,
-    Payload(&'a [u8])
-}
-
-impl<'a> ClientProtocol<'a> {
-
-    pub(crate) fn from(data: &'a [u8]) -> Result<Self> {
-        let mut data = data;
-        let checksum = data.read_u32::<NetworkEndian>()?;
-        let mut hasher = Hasher::new();
-        hasher.update(&PROTOCOL_ID.to_be_bytes());
-        hasher.update(data);
-        assert(checksum == hasher.finalize(), "bad checksum")?;
-        match data.read_u8()? {
-            0x00 => Ok(ClientProtocol::ConnectionRequest),
-            0x01 => Ok(ClientProtocol::Disconnect),
-            0x02 => Ok(ClientProtocol::Payload(data)),
-            _ => Err(Error::new(ErrorKind::InvalidData, "Invalid packet id"))
-        }
-    }
-
-    pub(crate) fn write<'b>(&self, data: &'b mut [u8]) -> Result<&'b [u8]> {
-        let mut data = Cursor::new(data);
-        data.write_all(&PROTOCOL_ID.to_be_bytes())?;
-        match self {
-            ClientProtocol::ConnectionRequest => {
-                data.write_u8(0x00)?
-            },
-            ClientProtocol::Disconnect => {
-                data.write_u8(0x01)?
-            },
-            ClientProtocol::Payload(payload) => {
-                data.write_u8(0x02)?;
-                data.write_all(payload)?;
-            }
-        }
-        let len = data.position() as usize;
-        let mut hasher = Hasher::new();
-        hasher.update(&data.get_ref()[..len]);
-        data.set_position(0);
-        data.write_u32::<NetworkEndian>(hasher.finalize())?;
-        Ok(&data.into_inner()[..len])
-    }
-
-}
-
-#[derive(Debug, PartialEq)]
-pub(crate) enum ServerProtocol<'a> {
     ConnectionAccepted(u16),
     ConnectionDenied,
     Disconnect,
     Payload(&'a [u8])
 }
 
-impl<'a> ServerProtocol<'a> {
+impl<'a> Packet<'a> {
 
     pub(crate) fn from(data: &'a [u8]) -> Result<Self> {
         let mut data = data;
@@ -78,11 +30,13 @@ impl<'a> ServerProtocol<'a> {
         hasher.update(&PROTOCOL_ID.to_be_bytes());
         hasher.update(data);
         assert(checksum == hasher.finalize(), "bad checksum")?;
+
         match data.read_u8()? {
-            0x00 => Ok(ServerProtocol::ConnectionAccepted(data.read_u16::<NetworkEndian>()?)),
-            0x01 => Ok(ServerProtocol::ConnectionDenied),
-            0x02 => Ok(ServerProtocol::Disconnect),
-            0x03 => Ok(ServerProtocol::Payload(data)),
+            0x00 => Ok(Packet::ConnectionRequest),
+            0x01 => Ok(Packet::ConnectionAccepted(data.read_u16::<NetworkEndian>()?)),
+            0x02 => Ok(Packet::ConnectionDenied),
+            0x03 => Ok(Packet::Disconnect),
+            0x04 => Ok(Packet::Payload(data)),
             _ => Err(Error::new(ErrorKind::InvalidData, "Invalid packet id"))
         }
     }
@@ -90,19 +44,23 @@ impl<'a> ServerProtocol<'a> {
     pub(crate) fn write<'b>(&self, data: &'b mut [u8]) -> Result<&'b [u8]> {
         let mut data = Cursor::new(data);
         data.write_all(&PROTOCOL_ID.to_be_bytes())?;
-        match *self {
-            ServerProtocol::ConnectionAccepted(id) => {
+
+        match self {
+            Packet::ConnectionRequest => {
                 data.write_u8(0x00)?;
-                data.write_u16::<NetworkEndian>(id)?
             },
-            ServerProtocol::ConnectionDenied => {
+            Packet::ConnectionAccepted(id) => {
                 data.write_u8(0x01)?;
+                data.write_u16::<NetworkEndian>(*id)?;
             },
-            ServerProtocol::Disconnect => {
+            Packet::ConnectionDenied => {
                 data.write_u8(0x02)?;
             },
-            ServerProtocol::Payload(payload) => {
+            Packet::Disconnect => {
                 data.write_u8(0x03)?;
+            },
+            Packet::Payload(payload) => {
+                data.write_u8(0x04)?;
                 data.write_all(payload)?;
             }
         }
@@ -118,22 +76,24 @@ impl<'a> ServerProtocol<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::protocol::{ClientProtocol, ServerProtocol};
+    use crate::protocol::{Packet};
 
     #[test]
-    fn test_client_protocol() {
+    fn test_packets() {
         let mut buffer = [0u8; 10];
 
         let test_cases = [
-            ClientProtocol::ConnectionRequest,
-            ClientProtocol::Disconnect,
-            ClientProtocol::Payload(&[1,2,3])
+            Packet::ConnectionRequest,
+            Packet::ConnectionAccepted(45),
+            Packet::ConnectionDenied,
+            Packet::Disconnect,
+            Packet::Payload(&[1,2,3])
         ];
 
         for test in test_cases {
             print!("Testing {:?}: ", test);
             let bin = test.write(&mut buffer).unwrap();
-            let rev = ClientProtocol::from(bin).unwrap();
+            let rev = Packet::from(bin).unwrap();
             assert_eq!(test, rev);
             println!("ok")
         }
@@ -141,43 +101,13 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn test_client_protocol_crc() {
+    fn test_packet_crc() {
         let mut buffer = [0u8; 10];
-        let test = ClientProtocol::ConnectionRequest;
+        let test = Packet::ConnectionRequest;
         let len = test.write(&mut buffer).unwrap().len();
         let bin= &mut buffer[..len];
         bin[4] += 1;
-        ClientProtocol::from(bin).unwrap();
+        Packet::from(bin).unwrap();
     }
 
-    #[test]
-    fn test_server_protocol() {
-        let mut buffer = [0u8; 10];
-
-        let test_cases = [
-            ServerProtocol::ConnectionAccepted(3),
-            ServerProtocol::ConnectionDenied,
-            ServerProtocol::Disconnect,
-            ServerProtocol::Payload(&[1,2,3])
-        ];
-
-        for test in test_cases {
-            print!("Testing {:?}: ", test);
-            let bin = test.write(&mut buffer).unwrap();
-            let rev = ServerProtocol::from(bin).unwrap();
-            assert_eq!(test, rev);
-            println!("ok")
-        }
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_server_protocol_crc() {
-        let mut buffer = [0u8; 10];
-        let test = ServerProtocol::ConnectionDenied;
-        let len = test.write(&mut buffer).unwrap().len();
-        let bin= &mut buffer[..len];
-        bin[4] += 1;
-        ServerProtocol::from(bin).unwrap();
-    }
 }
