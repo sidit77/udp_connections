@@ -14,6 +14,7 @@ fn client() {
     let mut buffer = [0u8; MAX_PAYLOAD_SIZE];
     let mut i = 0u32;
     'outer: loop {
+        socket.update().unwrap();
         while let Some(event) = socket.next_event(&mut buffer).unwrap() {
             match event {
                 ClientEvent::Connected(id) => println!("{} Connected as {}", prefix, id),
@@ -56,6 +57,7 @@ fn main(){
     //let mut i = 0u32;
     let mut buffer = [0u8; MAX_PAYLOAD_SIZE];
     loop {
+        socket.update().unwrap();
         while let Some(event) = socket.next_event(&mut buffer).unwrap() {
             match event {
                 ServerEvent::ClientConnected(client_id) =>

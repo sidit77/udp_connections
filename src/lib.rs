@@ -128,23 +128,24 @@ impl UdpClient {
         }
     }
 
+    pub fn update(&mut self) -> Result<()> {
+        match self.state {
+            ClientState::Connecting(_, _) => self.send_internal(Packet::ConnectionRequest),
+            _ => Ok(())
+        }
+    }
+
     pub fn next_event<'a>(&mut self, payload: &'a mut [u8]) -> Result<Option<ClientEvent<'a>>> {
         let now = Instant::now();
 
         match self.state {
-            ClientState::Connecting(_, start) => {
-                if (now - start) > CONNECTION_TIMEOUT {
-                    self.state = ClientState::Disconnected;
-                    return Ok(Some(ClientEvent::Disconnected(DisconnectReason::TimedOut)))
-                } else {
-                    self.send_internal(Packet::ConnectionRequest)?;
-                }
+            ClientState::Connecting(_, start) => if (now - start) > CONNECTION_TIMEOUT {
+                self.state = ClientState::Disconnected;
+                return Ok(Some(ClientEvent::Disconnected(DisconnectReason::TimedOut)))
             },
-            ClientState::Connected(_, last) => {
-                if (now - last) > CONNECTION_TIMEOUT {
-                    self.state = ClientState::Disconnected;
-                    return Ok(Some(ClientEvent::Disconnected(DisconnectReason::TimedOut)))
-                }
+            ClientState::Connected(_, last) if (now - last) > CONNECTION_TIMEOUT => {
+                self.state = ClientState::Disconnected;
+                return Ok(Some(ClientEvent::Disconnected(DisconnectReason::TimedOut)))
             },
             ClientState::Disconnecting(_) => {
                 self.state = ClientState::Disconnected;
@@ -280,6 +281,7 @@ impl ConnectionManager {
         self.0.iter().filter_map(|c|c.as_ref())
     }
 
+    #[allow(dead_code)]
     fn iter_mut(&mut self)  -> impl Iterator<Item=&mut VirtualConnection> {
         self.0.iter_mut().filter_map(|c|c.as_mut())
     }
@@ -308,23 +310,24 @@ impl UdpServer {
         self.socket.local_addr()
     }
 
+    pub fn update(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     pub fn next_event<'a>(&mut self, payload: &'a mut [u8]) -> Result<Option<ServerEvent<'a>>> {
         let now = Instant::now();
 
         {
-            let disconnect_client =
-                self.clients.iter_mut().find(|c|c.should_disconnect);
-            if let Some(conn) = disconnect_client{
-                let id = conn.id;
+            let disconnect_client = self.clients.iter().filter_map(|v|match v {
+                v if v.should_disconnect
+                    => Some((v.id, DisconnectReason::Disconnected)),
+                v if (now - v.last_received_packet) > CONNECTION_TIMEOUT
+                    => Some((v.id, DisconnectReason::TimedOut)),
+                _ => None
+            }).next();
+            if let Some((id, reason)) = disconnect_client{
                 self.clients.disconnect(id);
-                return Ok(Some(ServerEvent::ClientDisconnected(id, DisconnectReason::Disconnected)))
-            }
-            let timeout_client = self.clients.iter()
-                .find(|c|(now - c.last_received_packet) > CONNECTION_TIMEOUT);
-            if let Some(conn) = timeout_client {
-                let id = conn.id;
-                self.clients.disconnect(id);
-                return Ok(Some(ServerEvent::ClientDisconnected(id, DisconnectReason::TimedOut)))
+                return Ok(Some(ServerEvent::ClientDisconnected(id, reason)))
             }
         }
 
