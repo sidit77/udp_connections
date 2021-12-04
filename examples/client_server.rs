@@ -1,12 +1,16 @@
 use std::time::Duration;
 use byteorder::{BigEndian, ReadBytesExt};
-use udp_connections::{ClientEvent, MAX_PACKET_SIZE, ServerEvent, UdpClient, UdpServer};
+use udp_connections::{ClientEvent, ConditionedUdpClient, ConditionedUdpServer, MAX_PACKET_SIZE, NetworkOptions, ServerEvent};
 
 const SERVER: &str = "127.0.0.1:23452";
+const IDENTIFIER: &str = "udp_connections_demo";
+const NETWORK_CONFIG: NetworkOptions = NetworkOptions {
+    packet_loss: 0.25
+};
 
 fn client() {
     std::thread::sleep(Duration::from_secs_f32(0.5));
-    let mut socket = UdpClient::new("udp_connections_demo").unwrap();
+    let mut socket = ConditionedUdpClient::new(IDENTIFIER, NETWORK_CONFIG).unwrap();
     let prefix = format!("[Client {}]", socket.local_addr().unwrap());
     println!("{} starting up", prefix);
     socket.connect(SERVER).unwrap();
@@ -51,7 +55,8 @@ fn main(){
     let _ = std::thread::spawn(self::client);
     //let _ = std::thread::spawn(self::client);
 
-    let mut socket = UdpServer::listen(SERVER, "udp_connections_demo", 1).unwrap();
+    let mut socket = ConditionedUdpServer::listen(
+        SERVER, IDENTIFIER, 1, NETWORK_CONFIG).unwrap();
     let prefix = format!("[Server {}]", socket.local_addr().unwrap());
 
     //let mut i = 0u32;

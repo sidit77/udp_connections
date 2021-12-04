@@ -5,6 +5,9 @@ use std::io::{Error, ErrorKind, Result};
 use std::time::{Duration, Instant};
 use crate::protocol::Packet;
 
+mod conditioner;
+pub use conditioner::{NetworkOptions, ConditionedUdpClient, ConditionedUdpServer};
+
 pub const MAX_PACKET_SIZE: usize = 1500;
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
