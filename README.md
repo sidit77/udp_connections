@@ -6,6 +6,7 @@ This crates provides the following features:
 * Packet filtering - all packets not belonging to a connection are automatically discarded
 * Additional integrity checks using crc32
 * `Connect` / `Disconnect` event for both client and server
+* Automatic KeepAlive packets on inactivity
 
 
 
