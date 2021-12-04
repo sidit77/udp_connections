@@ -32,26 +32,44 @@ enum ClientState {
     Disconnecting(SocketAddr)
 }
 
+pub trait UdpSocketImpl {
+    fn send_to<A: ToSocketAddrs>(&self, buf: &[u8], addr: A) -> Result<usize>;
+    fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)>;
+    fn local_addr(&self) -> Result<SocketAddr>;
+}
+
+impl UdpSocketImpl for UdpSocket {
+    fn send_to<A: ToSocketAddrs>(&self, buf: &[u8], addr: A) -> Result<usize> {
+        self.send_to(buf, addr)
+    }
+
+    fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
+        self.recv_from(buf)
+    }
+
+    fn local_addr(&self) -> Result<SocketAddr> {
+        self.local_addr()
+    }
+}
+
 #[derive(Debug)]
-struct PacketSocket {
-    socket: UdpSocket,
+struct PacketSocket<U: UdpSocketImpl> {
+    socket: U,
     buffer: [u8; MAX_PACKET_SIZE],
     salt: String
 }
 
-impl PacketSocket {
+impl<U> PacketSocket<U> where U: UdpSocketImpl {
 
-    fn bind<A: ToSocketAddrs>(addrs: A, identifier: &str) -> Result<Self> {
-        let socket = UdpSocket::bind(addrs)?;
-        socket.set_nonblocking(true)?;
-        Ok(Self {
+    fn new(socket: U, identifier: &str) -> Self {
+        Self {
             socket,
             buffer: [0; MAX_PACKET_SIZE],
             salt: identifier.to_string()
-        })
+        }
     }
 
-    pub fn local_addr(&self) -> Result<SocketAddr> {
+    fn local_addr(&self) -> Result<SocketAddr> {
         self.socket.local_addr()
     }
 
@@ -60,14 +78,14 @@ impl PacketSocket {
         Ok((Packet::from(&self.buffer[..size], self.salt.as_bytes()), src))
     }
 
-    fn send_to<T: ToSocketAddrs>(&mut self, packet: Packet, addrs: T) -> Result<()> {
+    fn send_to<A: ToSocketAddrs>(&mut self, packet: Packet, addrs: A) -> Result<()> {
         let packet = packet.write(&mut self.buffer, self.salt.as_bytes())?;
         let i = self.socket.send_to(packet, addrs)?;
         assert_eq!(packet.len(), i);
         Ok(())
     }
 
-    fn send_with<T: Connection>(&mut self, packet: Packet, connection: &mut T) -> Result<()> {
+    fn send_with<C: Connection>(&mut self, packet: Packet, connection: &mut C) -> Result<()> {
         connection.on_send();
         self.send_to(packet, connection.addrs())
     }
@@ -82,21 +100,33 @@ trait Connection {
 
 
 #[derive(Debug)]
-pub struct UdpClient {
-    socket: PacketSocket,
+pub struct Client<U: UdpSocketImpl> {
+    socket: PacketSocket<U>,
     state: ClientState
 }
+
+pub type UdpClient = Client<UdpSocket>;
 
 impl UdpClient {
 
     pub fn new(identifier: &str) -> Result<Self> {
         let loopback = Ipv4Addr::new(127, 0, 0, 1);
         let address = SocketAddrV4::new(loopback, 0);
-        let socket = PacketSocket::bind(address, identifier)?;
-        Ok(Self {
-            socket,
+        let socket = UdpSocket::bind(address)?;
+        socket.set_nonblocking(true)?;
+
+        Ok(Self::from_socket(socket, identifier))
+    }
+
+}
+
+impl<U: UdpSocketImpl> Client<U> {
+
+    pub fn from_socket(socket: U, identifier: &str) -> Self{
+        Self {
+            socket: PacketSocket::new(socket, identifier),
             state: ClientState::Disconnected
-        })
+        }
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr> {
@@ -319,20 +349,32 @@ impl ConnectionManager {
 
 
 #[derive(Debug)]
-pub struct UdpServer {
-    socket: PacketSocket,
+pub struct Server<U: UdpSocketImpl> {
+    socket: PacketSocket<U>,
     clients: ConnectionManager
 }
+
+pub type UdpServer = Server<UdpSocket>;
 
 impl UdpServer {
 
     pub fn listen<A: ToSocketAddrs>(address: A, identifier: &str, max_clients: u16) -> Result<Self> {
-        let socket = PacketSocket::bind(address, identifier)?;
+        let socket = UdpSocket::bind(address)?;
+        socket.set_nonblocking(true)?;
+        Ok(Self::from_socket(socket, identifier, max_clients))
+    }
+
+}
+
+impl<U: UdpSocketImpl> Server<U> {
+
+    pub fn from_socket(socket: U, identifier: &str, max_clients: u16) -> Self {
+        let socket = PacketSocket::new(socket, identifier);
         let clients = ConnectionManager::new(max_clients);
-        Ok(Self {
+        Self {
             socket,
             clients
-        })
+        }
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr> {
