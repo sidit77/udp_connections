@@ -2,4 +2,6 @@
 
 members = [
     "udp_connections",
+    "message_channels",
+    "examples/message_channels_demo"
 ]
