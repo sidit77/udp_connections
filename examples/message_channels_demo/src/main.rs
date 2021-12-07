@@ -34,7 +34,7 @@ fn client() {
                     for payload in msg_channel.read(payload) {
                         let mut payload = &*payload;
                         let val = payload.read_u32::<BigEndian>().unwrap();
-                        println ! ("{} Packet {}", prefix, val);
+                        println ! ("{} Packet {}", prefix, val + 1);
                     }
                 }
             }
@@ -43,6 +43,7 @@ fn client() {
         if socket.is_connected() {
             if i % 5 == 0 {
                 socket.send(&*msg_channel.send(&(i / 5).to_be_bytes())).unwrap();
+                println!("{:?}", msg_channel);
                 if i > 60 {
                     socket.disconnect().unwrap();
                 }
@@ -63,7 +64,10 @@ fn main(){
     //let _ = std::thread::spawn(self::client);
 
     let mut socket = ConditionedUdpServer::listen(
-        SERVER, IDENTIFIER, 1, NETWORK_CONFIG).unwrap();
+        SERVER, IDENTIFIER, 1, NetworkOptions {
+            packet_loss: 0.2,
+            ..NETWORK_CONFIG
+        }).unwrap();
     let prefix = format!("[Server {}]", socket.local_addr().unwrap());
 
     let mut msg_channels = HashMap::new();
@@ -90,7 +94,8 @@ fn main(){
                     for payload in msg_channel.read(payload) {
                         let mut payload = &*payload;
                         let val = payload.read_u32::<BigEndian>().unwrap();
-                        println!("{} Packet {} from {}", prefix, val, client_id);
+                        println!("{} Packet {} from {}", prefix, val + 1, client_id);
+                        println!("{:b}", msg_channel.remote_sequence_bitfield);
                         socket.send(client_id, &*msg_channel.send(&val.to_be_bytes())).unwrap();
                     }
                 }
