@@ -1,8 +1,20 @@
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        let result = 2 + 2;
-        assert_eq!(result, 4);
+
+pub struct MessageChannel {
+
+}
+
+impl MessageChannel {
+
+    pub fn new() -> Self {
+        Self {}
     }
+
+    pub fn read(&mut self, data: &[u8]) -> Vec<Box<[u8]>> {
+        vec![data.into()]
+    }
+
+    pub fn send(&mut self, data: &[u8]) -> Box<[u8]> {
+        data.into()
+    }
+
 }
