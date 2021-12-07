@@ -5,7 +5,9 @@ use std::io::{Error, ErrorKind, Result};
 use std::time::{Duration, Instant};
 use crate::protocol::Packet;
 
+#[cfg(feature = "network_simulator")]
 mod conditioner;
+#[cfg(feature = "network_simulator")]
 pub use conditioner::{NetworkOptions, ConditionedUdpClient, ConditionedUdpServer};
 
 pub const MAX_PACKET_SIZE: usize = 1500;
