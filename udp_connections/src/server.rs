@@ -20,60 +20,78 @@ pub enum ServerEvent<'a> {
     Packet(u16, &'a [u8])
 }
 
+#[derive(Debug, Clone)]
+enum ClientState {
+    Disconnected,
+    Connected(VirtualConnection),
+    Disconnecting
+}
+
+impl Default for ClientState {
+    fn default() -> Self {
+        ClientState::Disconnected
+    }
+}
+
+impl ClientState {
+
+    fn get_connection(&self) -> Option<&VirtualConnection> {
+        match self {
+            ClientState::Connected(vc) => Some(vc),
+            _ => None
+        }
+    }
+
+    fn get_connection_mut(&mut self) -> Option<&mut VirtualConnection> {
+        match self {
+            ClientState::Connected(vc) => Some(vc),
+            _ => None
+        }
+    }
+}
+
 #[derive(Debug)]
-struct ConnectionManager(Box<[Option<VirtualConnection>]>);
+struct ConnectionManager(Box<[ClientState]>);
 
 impl ConnectionManager {
 
     fn new(max_clients: u16) -> Self{
         Self {
-            0:  vec![None; max_clients as usize].into_boxed_slice()
+            0:  vec![ClientState::Disconnected; max_clients as usize].into_boxed_slice()
         }
     }
 
-    #[allow(dead_code)]
-    fn get(&self, id: u16) -> Option<&VirtualConnection> {
-        self.0.get(id as usize).map(|c|c.as_ref()).flatten()
-    }
-
-    fn get_mut(&mut self, id: u16) -> Option<&mut VirtualConnection> {
-        self.0.get_mut(id as usize).map(|c|c.as_mut()).flatten()
+    fn get_mut(&mut self, id: u16) -> &mut ClientState {
+        &mut self.0[id as usize]
     }
 
     fn find_by_addrs(&mut self, addrs: SocketAddr) -> Option<&mut VirtualConnection> {
-        self.0
-            .iter_mut()
-            .filter_map(|c|c.as_mut())
-            .find(|c|c.addrs == addrs)
+        self.connections_mut().find(|c| c.addrs == addrs)
     }
 
     fn create_new_connection(&mut self, addrs: SocketAddr) -> Option<&mut VirtualConnection> {
-        self.0
-            .iter_mut()
-            .enumerate()
-            .find(|(_, c)|c.is_none())
-            .map(|(id, c)| {
-                *c = Some(VirtualConnection::new(addrs, id as u16));
-                c.as_mut().unwrap()
-            })
+        self.slots_mut().find_map(|(id, state)| match state {
+            ClientState::Disconnected => {
+                *state = ClientState::Connected(VirtualConnection::new(addrs, id));
+                match state {
+                    ClientState::Connected(vc) => Some(vc),
+                    _ => unreachable!()
+                }
+            },
+            _ => None
+        })
     }
 
-    fn disconnect(&mut self, id: u16) -> bool {
-        match self.0.get_mut(id as usize) {
-            None => false,
-            Some(slot) => {
-                *slot = None;
-                true
-            }
-        }
+    fn connections(&self) -> impl Iterator<Item=&VirtualConnection> {
+        self.0.iter().filter_map(|c|c.get_connection())
     }
 
-    fn iter(&self) -> impl Iterator<Item=&VirtualConnection> {
-        self.0.iter().filter_map(|c|c.as_ref())
+    fn connections_mut(&mut self) -> impl Iterator<Item=&mut VirtualConnection> {
+        self.0.iter_mut().filter_map(|c|c.get_connection_mut())
     }
 
-    fn iter_mut(&mut self)  -> impl Iterator<Item=&mut VirtualConnection> {
-        self.0.iter_mut().filter_map(|c|c.as_mut())
+    fn slots_mut(&mut self) -> impl Iterator<Item=(u16, &mut ClientState)> {
+        self.0.iter_mut().enumerate().map(|(id, state)|(id as u16, state))
     }
 
 }
@@ -84,7 +102,6 @@ pub struct Server<U: UdpSocketImpl> {
     socket: PacketSocket<U>,
     clients: ConnectionManager
 }
-
 
 
 impl<U: UdpSocketImpl> Server<U> {
@@ -104,7 +121,7 @@ impl<U: UdpSocketImpl> Server<U> {
 
     pub fn update(&mut self) -> Result<()> {
         let now = Instant::now();
-        for conn in self.clients.iter_mut() {
+        for conn in self.clients.connections_mut() {
             if (now - conn.last_send_packet) > KEEPALIVE_INTERVAL {
                 self.socket.send_with(Packet::KeepAlive, conn)?
             }
@@ -116,15 +133,14 @@ impl<U: UdpSocketImpl> Server<U> {
         let now = Instant::now();
 
         {
-            let disconnect_client = self.clients.iter().filter_map(|v|match v {
-                v if v.should_disconnect
-                => Some((v.id, ServerDisconnectReason::Disconnected)),
-                v if (now - v.last_received_packet) > CONNECTION_TIMEOUT
-                => Some((v.id, ServerDisconnectReason::TimedOut)),
+            let disconnect_client = self.clients.slots_mut().filter_map(|(id, state)|match state {
+                ClientState::Disconnecting => Some((id, ServerDisconnectReason::Disconnected)),
+                ClientState::Connected(v) if (now - v.last_received_packet) > CONNECTION_TIMEOUT
+                                              => Some((v.id, ServerDisconnectReason::TimedOut)),
                 _ => None
             }).next();
             if let Some((id, reason)) = disconnect_client{
-                self.clients.disconnect(id);
+                *self.clients.get_mut(id) = ClientState::Disconnected;
                 return Ok(Some(ServerEvent::ClientDisconnected(id, reason)))
             }
         }
@@ -167,7 +183,7 @@ impl<U: UdpSocketImpl> Server<U> {
                 Ok(Packet::Disconnect) => match self.clients.find_by_addrs(src) {
                     Some(conn) => {
                         let id = conn.id;
-                        self.clients.disconnect(id);
+                        *self.clients.get_mut(id) = ClientState::Disconnected;
                         Ok(Some(ServerEvent::ClientDisconnected(id, ServerDisconnectReason::Disconnected)))
                     },
                     None => self.next_event(payload)
@@ -180,11 +196,11 @@ impl<U: UdpSocketImpl> Server<U> {
     }
 
     pub fn connected_clients(&self) -> impl Iterator<Item=u16> +'_ {
-        self.clients.iter().map(|v|v.id)
+        self.clients.connections().map(|v|v.id)
     }
 
     pub fn broadcast(&mut self, payload: &[u8]) -> Result<()> {
-        for conn in self.clients.iter_mut() {
+        for conn in self.clients.connections_mut() {
             self.socket.send_with(Packet::Payload(payload), conn)?;
         }
         Ok(())
@@ -192,21 +208,22 @@ impl<U: UdpSocketImpl> Server<U> {
 
     pub fn send(&mut self, client_id: u16, payload: &[u8]) -> Result<()> {
         match self.clients.get_mut(client_id) {
-            Some(conn) => self.socket.send_with(Packet::Payload(payload), conn),
-            None => Err(Error::new(ErrorKind::NotConnected, "client not connected"))
+            ClientState::Connected(conn) => self.socket.send_with(Packet::Payload(payload), conn),
+            _ => Err(Error::new(ErrorKind::NotConnected, "client not connected"))
         }
     }
 
     pub fn disconnect(&mut self, client_id: u16) -> Result<()> {
-        match self.clients.get_mut(client_id) {
-            Some(conn) => {
+        let state = self.clients.get_mut(client_id);
+        match state {
+            ClientState::Connected(conn) => {
                 for _ in 0..10 {
                     self.socket.send_with(Packet::Disconnect, conn)?
                 }
-                conn.should_disconnect = true;
+                *state = ClientState::Disconnecting;
                 Ok(())
             },
-            None => Err(Error::new(ErrorKind::NotConnected, "client not connected"))
+            _ => Err(Error::new(ErrorKind::NotConnected, "client not connected"))
         }
     }
 

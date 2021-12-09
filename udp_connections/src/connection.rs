@@ -50,8 +50,7 @@ pub struct VirtualConnection {
     pub addrs: SocketAddr,
     pub id: u16,
     pub last_received_packet: Instant,
-    pub last_send_packet: Instant,
-    pub should_disconnect: bool
+    pub last_send_packet: Instant
 }
 
 impl VirtualConnection {
@@ -60,8 +59,7 @@ impl VirtualConnection {
             addrs,
             id,
             last_received_packet: Instant::now(),
-            last_send_packet: Instant::now(),
-            should_disconnect: false
+            last_send_packet: Instant::now()
         }
     }
 
