@@ -125,7 +125,7 @@ impl<U: UdpSocketImpl> Server<U> {
         let now = Instant::now();
         for conn in self.clients.connections_mut() {
             if (now - conn.last_send_packet) > KEEPALIVE_INTERVAL {
-                self.socket.send_with(Packet::KeepAlive, conn)?
+                self.socket.send_keepalive(conn)?
             }
         }
         Ok(())
@@ -182,9 +182,11 @@ impl<U: UdpSocketImpl> Server<U> {
                     },
                     None => self.next_event(payload)
                 },
-                Ok(Packet::KeepAlive) => match self.clients.find_by_addrs(src) {
+                Ok(Packet::KeepAlive(ack)) => match self.clients.find_by_addrs(src) {
                     Some(conn) => {
+                        let id = conn.id;
                         conn.on_receive();
+                        conn.handle_ack(ack, |i|self.ack_queue.push_back((id, i)));
                         self.next_event(payload)
                     },
                     None => self.next_event(payload)

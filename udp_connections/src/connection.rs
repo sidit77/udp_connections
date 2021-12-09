@@ -51,6 +51,11 @@ impl<U> PacketSocket<U> where U: UdpSocketImpl {
         Ok(seq)
     }
 
+    pub fn send_keepalive(&mut self, connection: &mut VirtualConnection) -> Result<()> {
+        let ack = connection.received_packets;
+        self.send_with(Packet::KeepAlive(ack), connection)
+    }
+
 }
 
 #[derive(Clone, Default)]

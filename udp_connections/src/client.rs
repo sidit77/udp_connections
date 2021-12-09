@@ -94,7 +94,7 @@ impl<U: UdpSocketImpl> Client<U> {
             ClientState::Connecting(remote, _)
             => self.socket.send_to(Packet::ConnectionRequest, remote),
             ClientState::Connected(ref mut vc) if (now - vc.last_send_packet) > KEEPALIVE_INTERVAL
-            => self.socket.send_with(Packet::KeepAlive, vc),
+            => self.socket.send_keepalive(vc),
             _ => Ok(())
         }
     }
@@ -144,8 +144,9 @@ impl<U: UdpSocketImpl> Client<U> {
                         vc.handle_ack(ack, |i|self.ack_queue.push_back(i));
                         Ok(Some(ClientEvent::PacketReceived(result)))
                     },
-                    Ok(Packet::KeepAlive) => {
+                    Ok(Packet::KeepAlive(ack)) => {
                         vc.on_receive();
+                        vc.handle_ack(ack, |i|self.ack_queue.push_back(i));
                         self.next_event(payload)
                     },
                     Ok(Packet::Disconnect) => {

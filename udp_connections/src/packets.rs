@@ -16,7 +16,7 @@ pub enum Packet<'a> {
     ConnectionRequest,
     ConnectionAccepted(u16),
     ConnectionDenied,
-    KeepAlive,
+    KeepAlive(SequenceNumberSet),
     Disconnect,
     Payload(SequenceNumber, SequenceNumberSet, &'a [u8])
 }
@@ -35,7 +35,10 @@ impl<'a> Packet<'a> {
             0x00 => Ok(Packet::ConnectionRequest),
             0x01 => Ok(Packet::ConnectionAccepted(data.read_u16::<NetworkEndian>()?)),
             0x02 => Ok(Packet::ConnectionDenied),
-            0x03 => Ok(Packet::KeepAlive),
+            0x03 => Ok(Packet::KeepAlive(SequenceNumberSet::from_bitfield(
+                data.read_u16::<NetworkEndian>()?,
+                data.read_u32::<NetworkEndian>()?
+            ))),
             0x04 => Ok(Packet::Disconnect),
             0x05 => Ok({
                 let sequence = data.read_u16::<NetworkEndian>()?;
@@ -67,8 +70,10 @@ impl<'a> Packet<'a> {
             Packet::ConnectionDenied => {
                 data.write_u8(0x02)?;
             },
-            Packet::KeepAlive => {
+            Packet::KeepAlive(ack) => {
                 data.write_u8(0x03)?;
+                data.write_u16::<NetworkEndian>(ack.latest())?;
+                data.write_u32::<NetworkEndian>(ack.bitfield())?;
             },
             Packet::Disconnect => {
                 data.write_u8(0x04)?;
@@ -108,7 +113,7 @@ mod tests {
             Packet::ConnectionRequest,
             Packet::ConnectionAccepted(45),
             Packet::ConnectionDenied,
-            Packet::KeepAlive,
+            Packet::KeepAlive(SequenceNumberSet::new(0)),
             Packet::Disconnect,
             Packet::Payload(0, SequenceNumberSet::new(0), &[1,2,3])
         ];
