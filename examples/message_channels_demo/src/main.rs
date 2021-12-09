@@ -95,7 +95,6 @@ fn main(){
                         let mut payload = &*payload;
                         let val = payload.read_u32::<BigEndian>().unwrap();
                         println!("{} Packet {} from {}", prefix, val + 1, client_id);
-                        println!("{:b}", msg_channel.remote_sequence_bitfield);
                         socket.send(client_id, &*msg_channel.send(&val.to_be_bytes())).unwrap();
                     }
                 }

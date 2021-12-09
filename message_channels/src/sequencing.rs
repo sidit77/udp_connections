@@ -126,3 +126,150 @@ pub fn sequence_greater_than(s1: SequenceNumber, s2: SequenceNumber) -> bool {
 pub fn sequence_less_than(s1: SequenceNumber, s2: SequenceNumber) -> bool {
     sequence_greater_than(s2, s1)
 }
+
+type SequenceBitfield = u32;
+
+#[derive(Copy, Clone)]
+pub struct SequenceNumberSet {
+    latest: SequenceNumber,
+    bitfield: SequenceBitfield
+}
+
+impl SequenceNumberSet {
+
+    pub fn from_bitfield(latest: SequenceNumber, bitfield: SequenceBitfield) -> Self {
+        Self {
+            latest,
+            bitfield
+        }
+    }
+
+    pub fn new(sequence: SequenceNumber) -> Self{
+        Self::from_bitfield(sequence, 0)
+    }
+
+    pub const fn capacity() -> usize {
+        SequenceBitfield::BITS as usize + 1
+    }
+
+    pub fn latest(self) -> SequenceNumber {
+        self.latest
+    }
+
+    pub fn bitfield(self) -> SequenceBitfield {
+        self.bitfield
+    }
+
+    pub fn contains(self, sequence: SequenceNumber) -> bool {
+        match self.latest == sequence {
+            true => true,
+            false => match self.index(sequence) {
+                None => false,
+                Some(index) => (self.bitfield >> index) & 0b1 == 0b1
+            }
+        }
+    }
+
+    pub fn insert(&mut self, sequence: SequenceNumber) {
+        match sequence_greater_than(sequence, self.latest) {
+            true => {
+                let offset = sequence.wrapping_sub(self.latest);
+                self.bitfield <<= 1;
+                self.bitfield |= 0b1;
+                self.bitfield <<= offset - 1;
+                self.latest = sequence;
+            }
+            false => match self.index(sequence) {
+                None => {}
+                Some(index) => self.bitfield |= 0b1 << index
+            }
+        }
+    }
+
+    fn index(self, sequence: SequenceNumber) -> Option<usize> {
+        if sequence_less_than(sequence, self.latest) {
+            let offset: usize = self.latest.wrapping_sub(sequence).into();
+            if offset >= Self::capacity() {
+                return None
+            }
+            return Some(offset - 1)
+        }
+        None
+    }
+
+    pub fn iter(self) -> impl Iterator<Item=SequenceNumber> {
+        (0..Self::capacity())
+            .rev()
+            .map(move |i|self.latest.wrapping_sub(i as SequenceNumber))
+            .filter(move |i|self.contains(*i))
+    }
+
+}
+
+impl Debug for SequenceNumberSet {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut iter = self.iter();
+        write!(f, "[")?;
+        if let Some(arg) = iter.next() {
+            write!(f, "{}", arg)?;
+            for arg in iter {
+                write!(f, ", {}", arg)?;
+            }
+        }
+        write!(f, "]")?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    mod sequence_set {
+        use crate::sequencing::{SequenceNumber, SequenceNumberSet};
+
+        #[test]
+        fn test_contains() {
+            let set = SequenceNumberSet::from_bitfield(3, 0b000010001);
+            assert!(!set.contains(4));
+            assert!( set.contains(3));
+            assert!( set.contains(2));
+            assert!(!set.contains(1));
+            assert!(!set.contains(0));
+            assert!(!set.contains(SequenceNumber::MAX - 0));
+            assert!( set.contains(SequenceNumber::MAX - 1));
+            assert!(!set.contains(SequenceNumber::MAX - 2));
+            assert!(!set.contains(SequenceNumber::MAX - 3));
+        }
+
+        #[test]
+        fn test_insert() {
+            let mut set = SequenceNumberSet::new(0);
+            assert_eq!(set.latest(), 0);
+            assert_eq!(set.bitfield(), 0b0);
+
+            set.insert(5);
+            assert_eq!(set.latest(), 5);
+            assert_eq!(set.bitfield(), 0b10000);
+
+            set.insert(7);
+            assert_eq!(set.latest(), 7);
+            assert_eq!(set.bitfield(), 0b1000010);
+
+            set.insert(3);
+            assert_eq!(set.latest(), 7);
+            assert_eq!(set.bitfield(), 0b1001010);
+        }
+
+        #[test]
+        fn test_iter() {
+            let mut iter = SequenceNumberSet::from_bitfield(3, 0b000010001).iter();
+            assert_eq!(iter.next(), Some(SequenceNumber::MAX - 1));
+            assert_eq!(iter.next(), Some(2));
+            assert_eq!(iter.next(), Some(3));
+            assert_eq!(iter.next(), None);
+
+        }
+
+    }
+
+}
