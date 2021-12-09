@@ -1,15 +1,20 @@
+mod sequencing;
+
+use std::fmt::Debug;
 use std::io::Write;
 use byteorder::{WriteBytesExt, NetworkEndian, ReadBytesExt};
+use crate::sequencing::SequenceBuffer;
 
 #[derive(Debug)]
 pub struct MessageChannel {
     pub local_sequence_number: u16,
     pub remote_sequence_number: u16,
     pub remote_sequence_bitfield: u32,
-    pub send_items: Vec<u16>
+    pub send_items: SequenceBuffer<SendPacket>
 }
 
-
+#[derive(Clone, Default)]
+pub struct SendPacket;
 
 impl MessageChannel {
 
@@ -18,7 +23,7 @@ impl MessageChannel {
             local_sequence_number: 0,
             remote_sequence_number: 0,
             remote_sequence_bitfield: 0,
-            send_items: Vec::new()
+            send_items: SequenceBuffer::with_capacity(1024)
         }
     }
 
@@ -32,18 +37,13 @@ impl MessageChannel {
             self.remote_sequence_bitfield |= 0x1;
             self.remote_sequence_bitfield <<= (sequence - self.remote_sequence_number - 1);
             self.remote_sequence_number = sequence;
-            self.send_items.retain(|i| {
-                if *i == ack {
-                    false
-                } else {
-                    let diff = ack.saturating_sub(*i);
-                    if (1..=32).contains(&diff) {
-                        (ack_bitfield >> (diff - 1)) & 0x1 == 0x0
-                    } else {
-                        true
-                    }
+
+            self.send_items.remove(ack);
+            for i in 0..u32::BITS as u16 {
+                if ack > i && (ack_bitfield >> i) & 0x1 == 0x1 {
+                    self.send_items.remove(ack - 1 - i);
                 }
-            });
+            }
             vec![packet.into()]
         } else {
             vec![]
@@ -57,7 +57,7 @@ impl MessageChannel {
         let mut packet = Vec::new();
         self.local_sequence_number += 1;
         packet.write_u16::<NetworkEndian>(self.local_sequence_number).unwrap();
-        self.send_items.push(self.local_sequence_number);
+        self.send_items.insert(self.local_sequence_number, SendPacket);
         packet.write_u16::<NetworkEndian>(self.remote_sequence_number).unwrap();
         packet.write_u32::<NetworkEndian>(self.remote_sequence_bitfield).unwrap();
         packet.write_all(data).unwrap();
@@ -66,3 +66,4 @@ impl MessageChannel {
     }
 
 }
+
