@@ -1,6 +1,8 @@
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
 use std::io::Result;
-use crate::{Client, Server, UdpSocketImpl};
+use crate::client::Client;
+use crate::server::Server;
+use crate::socket::UdpSocketImpl;
 
 #[derive(Debug, Copy, Clone)]
 pub struct NetworkOptions {

@@ -86,7 +86,7 @@ impl<'a> Packet<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::protocol::{Packet};
+    use crate::packets::{Packet};
 
     const SALT: [u8; 4] = 123456u32.to_be_bytes();
 
