@@ -7,7 +7,7 @@ use crate::socket::{Connection, PacketSocket, UdpSocketImpl};
 use crate::server::VirtualConnection;
 
 #[derive(Debug, Copy, Clone)]
-pub enum DisconnectReason {
+pub enum ClientDisconnectReason {
     Disconnected,
     TimedOut,
     ConnectionDenied
@@ -16,7 +16,7 @@ pub enum DisconnectReason {
 #[derive(Debug, Copy, Clone)]
 pub enum ClientEvent<'a> {
     Connected(u16),
-    Disconnected(DisconnectReason),
+    Disconnected(ClientDisconnectReason),
     Packet(&'a [u8])
 }
 
@@ -100,15 +100,15 @@ impl<U: UdpSocketImpl> Client<U> {
         match self.state {
             ClientState::Connecting(_, start) => if (now - start) > CONNECTION_TIMEOUT {
                 self.state = ClientState::Disconnected;
-                return Ok(Some(ClientEvent::Disconnected(DisconnectReason::TimedOut)))
+                return Ok(Some(ClientEvent::Disconnected(ClientDisconnectReason::TimedOut)))
             },
             ClientState::Connected(vc) if (now - vc.last_received_packet) > CONNECTION_TIMEOUT => {
                 self.state = ClientState::Disconnected;
-                return Ok(Some(ClientEvent::Disconnected(DisconnectReason::TimedOut)))
+                return Ok(Some(ClientEvent::Disconnected(ClientDisconnectReason::TimedOut)))
             },
             ClientState::Disconnecting(_) => {
                 self.state = ClientState::Disconnected;
-                return Ok(Some(ClientEvent::Disconnected(DisconnectReason::Disconnected)))
+                return Ok(Some(ClientEvent::Disconnected(ClientDisconnectReason::Disconnected)))
             }
             _ => {}
         }
@@ -122,7 +122,7 @@ impl<U: UdpSocketImpl> Client<U> {
                     },
                     Ok(Packet::ConnectionDenied) => {
                         self.state = ClientState::Disconnected;
-                        Ok(Some(ClientEvent::Disconnected(DisconnectReason::ConnectionDenied)))
+                        Ok(Some(ClientEvent::Disconnected(ClientDisconnectReason::ConnectionDenied)))
                     }
                     _ => self.next_event(payload)
                 },
@@ -139,7 +139,7 @@ impl<U: UdpSocketImpl> Client<U> {
                     },
                     Ok(Packet::Disconnect) => {
                         self.state = ClientState::Disconnected;
-                        Ok(Some(ClientEvent::Disconnected(DisconnectReason::Disconnected)))
+                        Ok(Some(ClientEvent::Disconnected(ClientDisconnectReason::Disconnected)))
                     },
                     _ => self.next_event(payload)
                 }

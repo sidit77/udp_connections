@@ -11,7 +11,7 @@ fn assert(v: bool, reason: &str) -> Result<()> {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum Packet<'a> {
+pub enum Packet<'a> {
     ConnectionRequest,
     ConnectionAccepted(u16),
     ConnectionDenied,
@@ -22,7 +22,7 @@ pub(crate) enum Packet<'a> {
 
 impl<'a> Packet<'a> {
 
-    pub(crate) fn from(data: &'a [u8], salt: &[u8]) -> Result<Self> {
+    pub fn from(data: &'a [u8], salt: &[u8]) -> Result<Self> {
         let mut data = data;
         let checksum = data.read_u32::<NetworkEndian>()?;
         let mut hasher = Hasher::new();
@@ -45,7 +45,7 @@ impl<'a> Packet<'a> {
         }
     }
 
-    pub(crate) fn write<'b>(&self, data: &'b mut [u8], salt: &[u8]) -> Result<&'b [u8]> {
+    pub fn write<'b>(&self, data: &'b mut [u8], salt: &[u8]) -> Result<&'b [u8]> {
         let mut data = Cursor::new(data);
         data.write_u32::<NetworkEndian>(0)?;
         let len1 = data.position() as usize;
@@ -75,7 +75,7 @@ impl<'a> Packet<'a> {
         }
         let len2 = data.position() as usize;
         let mut hasher = Hasher::new();
-        hasher.update(&salt);
+        hasher.update(salt);
         hasher.update(&data.get_ref()[len1..len2]);
         data.set_position(0);
         data.write_u32::<NetworkEndian>(hasher.finalize())?;

@@ -1,15 +1,21 @@
 use std::io::{Error, ErrorKind, Result};
-use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
+use std::net::{SocketAddr};
 use std::time::Instant;
-use crate::client::DisconnectReason;
 use crate::constants::{CONNECTION_TIMEOUT, KEEPALIVE_INTERVAL};
 use crate::packets::Packet;
 use crate::socket::{Connection, PacketSocket, UdpSocketImpl};
 
 #[derive(Debug, Copy, Clone)]
+pub enum ServerDisconnectReason {
+    Disconnected,
+    TimedOut,
+    ConnectionDenied
+}
+
+#[derive(Debug, Copy, Clone)]
 pub enum ServerEvent<'a> {
     ClientConnected(u16),
-    ClientDisconnected(u16, DisconnectReason),
+    ClientDisconnected(u16, ServerDisconnectReason),
     Packet(u16, &'a [u8])
 }
 
@@ -115,17 +121,7 @@ pub struct Server<U: UdpSocketImpl> {
     clients: ConnectionManager
 }
 
-pub type UdpServer = Server<UdpSocket>;
 
-impl UdpServer {
-
-    pub fn listen<A: ToSocketAddrs>(address: A, identifier: &str, max_clients: u16) -> Result<Self> {
-        let socket = UdpSocket::bind(address)?;
-        socket.set_nonblocking(true)?;
-        Ok(Self::from_socket(socket, identifier, max_clients))
-    }
-
-}
 
 impl<U: UdpSocketImpl> Server<U> {
 
@@ -158,9 +154,9 @@ impl<U: UdpSocketImpl> Server<U> {
         {
             let disconnect_client = self.clients.iter().filter_map(|v|match v {
                 v if v.should_disconnect
-                => Some((v.id, DisconnectReason::Disconnected)),
+                => Some((v.id, ServerDisconnectReason::Disconnected)),
                 v if (now - v.last_received_packet) > CONNECTION_TIMEOUT
-                => Some((v.id, DisconnectReason::TimedOut)),
+                => Some((v.id, ServerDisconnectReason::TimedOut)),
                 _ => None
             }).next();
             if let Some((id, reason)) = disconnect_client{
@@ -208,7 +204,7 @@ impl<U: UdpSocketImpl> Server<U> {
                     Some(conn) => {
                         let id = conn.id;
                         self.clients.disconnect(id);
-                        Ok(Some(ServerEvent::ClientDisconnected(id, DisconnectReason::Disconnected)))
+                        Ok(Some(ServerEvent::ClientDisconnected(id, ServerDisconnectReason::Disconnected)))
                     },
                     None => self.next_event(payload)
                 },

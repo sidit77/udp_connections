@@ -4,10 +4,10 @@ mod client;
 mod constants;
 mod server;
 
-pub use client::ClientEvent;
-pub use server::ServerEvent;
+pub use client::{ClientEvent, ClientDisconnectReason};
+pub use server::{ServerEvent, ServerDisconnectReason};
 pub use constants::MAX_PACKET_SIZE;
-
+pub use socket::{UdpServer, UdpClient};
 
 
 #[cfg(feature = "network_simulator")]

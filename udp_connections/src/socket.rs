@@ -3,21 +3,7 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
 use crate::client::Client;
 use crate::constants::MAX_PACKET_SIZE;
 use crate::packets::Packet;
-
-pub type UdpClient = Client<UdpSocket>;
-impl UdpClient {
-
-    pub fn new(identifier: &str) -> Result<Self> {
-        let loopback = Ipv4Addr::new(127, 0, 0, 1);
-        let address = SocketAddrV4::new(loopback, 0);
-        let socket = UdpSocket::bind(address)?;
-        socket.set_nonblocking(true)?;
-
-        Ok(Self::from_socket(socket, identifier))
-    }
-
-}
-
+use crate::server::Server;
 
 pub trait UdpSocketImpl {
     fn send_to<A: ToSocketAddrs>(&self, buf: &[u8], addr: A) -> Result<usize>;
@@ -40,11 +26,33 @@ impl UdpSocketImpl for UdpSocket {
 }
 
 #[derive(Debug)]
-pub(crate) struct PacketSocket<U: UdpSocketImpl> {
+pub struct PacketSocket<U: UdpSocketImpl> {
     socket: U,
     buffer: [u8; MAX_PACKET_SIZE],
     salt: String
 }
+
+pub type UdpClient = Client<UdpSocket>;
+impl UdpClient {
+    pub fn new(identifier: &str) -> Result<Self> {
+        let loopback = Ipv4Addr::new(127, 0, 0, 1);
+        let address = SocketAddrV4::new(loopback, 0);
+        let socket = UdpSocket::bind(address)?;
+        socket.set_nonblocking(true)?;
+
+        Ok(Self::from_socket(socket, identifier))
+    }
+}
+
+pub type UdpServer = Server<UdpSocket>;
+impl UdpServer {
+    pub fn listen<A: ToSocketAddrs>(address: A, identifier: &str, max_clients: u16) -> Result<Self> {
+        let socket = UdpSocket::bind(address)?;
+        socket.set_nonblocking(true)?;
+        Ok(Self::from_socket(socket, identifier, max_clients))
+    }
+}
+
 
 impl<U> PacketSocket<U> where U: UdpSocketImpl {
 
@@ -79,7 +87,7 @@ impl<U> PacketSocket<U> where U: UdpSocketImpl {
 
 }
 
-pub(crate) trait Connection {
+pub trait Connection {
     fn on_send(&mut self);
     fn on_receive(&mut self);
     fn addrs(&self) -> SocketAddr;
