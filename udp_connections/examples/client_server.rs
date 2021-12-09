@@ -34,11 +34,11 @@ fn client() {
         }
 
         if socket.is_connected() {
-            if i % 10 == 0 {
-                socket.send(&(i / 10).to_be_bytes()).unwrap();
-                //if i > 60 {
-                //    socket.disconnect().unwrap();
-                //}
+            if i % 5 == 0 {
+                socket.send(&(i / 5).to_be_bytes()).unwrap();
+                if i > 100 {
+                    socket.disconnect().unwrap();
+                }
             }
             i += 1;
         }
@@ -52,23 +52,30 @@ fn client() {
 }
 
 fn main(){
-    let _ = std::thread::spawn(self::client);
+    let c1 = std::thread::spawn(self::client);
     //let _ = std::thread::spawn(self::client);
 
     let mut socket = ConditionedUdpServer::listen(
-        SERVER, IDENTIFIER, 1, NETWORK_CONFIG).unwrap();
+        SERVER, IDENTIFIER, 1, NetworkOptions {
+            packet_loss: 0.2,
+            ..NETWORK_CONFIG
+        }).unwrap();
     let prefix = format!("[Server {}]", socket.local_addr().unwrap());
 
     //let mut i = 0u32;
     let mut buffer = [0u8; MAX_PACKET_SIZE];
-    loop {
+    'outer: loop  {
         socket.update().unwrap();
         while let Some(event) = socket.next_event(&mut buffer).unwrap() {
             match event {
                 ServerEvent::ClientConnected(client_id) =>
                     println!("{} Client {} connected", prefix, client_id),
-                ServerEvent::ClientDisconnected(client_id, reason) =>
-                    println!("{} Client {} disconnected: {:?}", prefix, client_id, reason),
+                ServerEvent::ClientDisconnected(client_id, reason) => {
+                    println!("{} Client {} disconnected: {:?}", prefix, client_id, reason);
+                    if socket.connected_clients().count() == 0 {
+                        break 'outer;
+                    }
+                },
                 ServerEvent::Packet(client_id, mut payload) => {
                     let val = payload.read_u32::<BigEndian>().unwrap();
                     println!("{} Packet {} from {}", prefix, val, client_id);
@@ -83,4 +90,5 @@ fn main(){
         std::thread::sleep(Duration::from_secs_f32(0.05));
     }
 
+    c1.join().unwrap();
 }
