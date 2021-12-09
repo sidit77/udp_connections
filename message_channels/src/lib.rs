@@ -3,13 +3,12 @@ mod sequencing;
 use std::fmt::Debug;
 use std::io::Write;
 use byteorder::{WriteBytesExt, NetworkEndian, ReadBytesExt};
-use crate::sequencing::{SequenceBuffer, SequenceNumberSet};
+use crate::sequencing::{SequenceBuffer, SequenceNumber, SequenceNumberSet};
 
 #[derive(Debug)]
 pub struct MessageChannel {
-    pub local_sequence_number: u16,
-    pub remote_sequence: SequenceNumberSet,
-    pub send_items: SequenceBuffer<SendPacket>
+    received_packets: SequenceNumberSet,
+    sent_packets: SequenceBuffer<SendPacket>
 }
 
 #[derive(Clone, Default)]
@@ -19,22 +18,23 @@ impl MessageChannel {
 
     pub fn new() -> Self {
         Self {
-            local_sequence_number: 0,
-            remote_sequence: SequenceNumberSet::new(0),
-            send_items: SequenceBuffer::with_capacity(1024)
+            received_packets: SequenceNumberSet::new(0),
+            sent_packets: SequenceBuffer::with_capacity(64)
         }
     }
 
-    pub fn read(&mut self, data: &[u8]) -> Vec<Box<[u8]>> {
+    pub fn read<F>(&mut self, data: &[u8], f: F) -> Vec<Box<[u8]>> where F: Fn(SequenceNumber){
         let mut packet = data;
         let sequence = packet.read_u16::<NetworkEndian>().unwrap();
-        let ack = SequenceNumberSet::from_bitfield(
+        let ack_packets = SequenceNumberSet::from_bitfield(
             packet.read_u16::<NetworkEndian>().unwrap(),
             packet.read_u32::<NetworkEndian>().unwrap());
 
-        self.remote_sequence.insert(sequence);
-        for seq in ack.iter() {
-            self.send_items.remove(seq);
+        self.received_packets.insert(sequence);
+        for seq in ack_packets.iter() {
+            if let Some(_) = self.sent_packets.remove(seq) {
+                f(seq);
+            }
         }
         vec![packet.into()]
 
@@ -42,11 +42,10 @@ impl MessageChannel {
 
     pub fn send(&mut self, data: &[u8]) -> Box<[u8]> {
         let mut packet = Vec::new();
-        self.local_sequence_number += 1;
-        packet.write_u16::<NetworkEndian>(self.local_sequence_number).unwrap();
-        self.send_items.insert(self.local_sequence_number, SendPacket);
-        packet.write_u16::<NetworkEndian>(self.remote_sequence.latest()).unwrap();
-        packet.write_u32::<NetworkEndian>(self.remote_sequence.bitfield()).unwrap();
+        let sequence = self.sent_packets.insert(SendPacket);
+        packet.write_u16::<NetworkEndian>(sequence).unwrap();
+        packet.write_u16::<NetworkEndian>(self.received_packets.latest()).unwrap();
+        packet.write_u32::<NetworkEndian>(self.received_packets.bitfield()).unwrap();
         packet.write_all(data).unwrap();
         packet.into_boxed_slice()
 
