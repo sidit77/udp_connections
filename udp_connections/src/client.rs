@@ -1,10 +1,10 @@
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::io::{Error, ErrorKind, Result};
 use std::time::Instant;
+use crate::connection::{PacketSocket, VirtualConnection};
 use crate::constants::{CONNECTION_TIMEOUT, KEEPALIVE_INTERVAL};
 use crate::packets::Packet;
-use crate::socket::{Connection, PacketSocket, UdpSocketImpl};
-use crate::server::VirtualConnection;
+use crate::socket::UdpSocketImpl;
 
 #[derive(Debug, Copy, Clone)]
 pub enum ClientDisconnectReason {

@@ -1,9 +1,10 @@
 use std::io::{Error, ErrorKind, Result};
 use std::net::{SocketAddr};
 use std::time::Instant;
+use crate::connection::{PacketSocket, VirtualConnection};
 use crate::constants::{CONNECTION_TIMEOUT, KEEPALIVE_INTERVAL};
 use crate::packets::Packet;
-use crate::socket::{Connection, PacketSocket, UdpSocketImpl};
+use crate::socket::UdpSocketImpl;
 
 #[derive(Debug, Copy, Clone)]
 pub enum ServerDisconnectReason {
@@ -18,43 +19,6 @@ pub enum ServerEvent<'a> {
     ClientDisconnected(u16, ServerDisconnectReason),
     Packet(u16, &'a [u8])
 }
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct VirtualConnection {
-    pub(crate) addrs: SocketAddr,
-    id: u16,
-    pub(crate) last_received_packet: Instant,
-    pub(crate) last_send_packet: Instant,
-    should_disconnect: bool
-}
-
-impl VirtualConnection {
-    pub(crate) fn new(addrs: SocketAddr, id: u16) -> Self {
-        Self {
-            addrs,
-            id,
-            last_received_packet: Instant::now(),
-            last_send_packet: Instant::now(),
-            should_disconnect: false
-        }
-    }
-
-}
-
-impl Connection for VirtualConnection {
-    fn on_send(&mut self) {
-        self.last_send_packet = Instant::now();
-    }
-
-    fn on_receive(&mut self) {
-        self.last_received_packet = Instant::now();
-    }
-
-    fn addrs(&self) -> SocketAddr {
-        self.addrs
-    }
-}
-
 
 #[derive(Debug)]
 struct ConnectionManager(Box<[Option<VirtualConnection>]>);
