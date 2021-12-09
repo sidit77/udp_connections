@@ -1,9 +1,11 @@
+use std::collections::VecDeque;
 use std::io::{Error, ErrorKind, Result};
 use std::net::{SocketAddr};
 use std::time::Instant;
 use crate::connection::{PacketSocket, VirtualConnection};
 use crate::constants::{CONNECTION_TIMEOUT, KEEPALIVE_INTERVAL};
 use crate::packets::Packet;
+use crate::sequencing::SequenceNumber;
 use crate::socket::UdpSocketImpl;
 
 #[derive(Debug, Copy, Clone)]
@@ -17,7 +19,8 @@ pub enum ServerDisconnectReason {
 pub enum ServerEvent<'a> {
     ClientConnected(u16),
     ClientDisconnected(u16, ServerDisconnectReason),
-    Packet(u16, &'a [u8])
+    PacketReceived(u16, SequenceNumber, &'a [u8]),
+    PacketAcknowledged(u16, SequenceNumber)
 }
 
 #[derive(Debug, Clone)]
@@ -73,10 +76,7 @@ impl ConnectionManager {
         self.slots_mut().find_map(|(id, state)| match state {
             ClientState::Disconnected => {
                 *state = ClientState::Connected(VirtualConnection::new(addrs, id));
-                match state {
-                    ClientState::Connected(vc) => Some(vc),
-                    _ => unreachable!()
-                }
+                state.get_connection_mut()
             },
             _ => None
         })
@@ -100,7 +100,8 @@ impl ConnectionManager {
 #[derive(Debug)]
 pub struct Server<U: UdpSocketImpl> {
     socket: PacketSocket<U>,
-    clients: ConnectionManager
+    clients: ConnectionManager,
+    ack_queue: VecDeque<(u16, SequenceNumber)>
 }
 
 
@@ -111,7 +112,8 @@ impl<U: UdpSocketImpl> Server<U> {
         let clients = ConnectionManager::new(max_clients);
         Self {
             socket,
-            clients
+            clients,
+            ack_queue: VecDeque::new()
         }
     }
 
@@ -131,6 +133,10 @@ impl<U: UdpSocketImpl> Server<U> {
 
     pub fn next_event<'a>(&mut self, payload: &'a mut [u8]) -> Result<Option<ServerEvent<'a>>> {
         let now = Instant::now();
+
+        if let Some((client, seq)) = self.ack_queue.pop_front() {
+            return Ok(Some(ServerEvent::PacketAcknowledged(client, seq)))
+        }
 
         {
             let disconnect_client = self.clients.slots_mut().filter_map(|(id, state)|match state {
@@ -164,12 +170,15 @@ impl<U: UdpSocketImpl> Server<U> {
                         self.next_event(payload)
                     }
                 },
-                Ok(Packet::Payload(data)) => match self.clients.find_by_addrs(src) {
+                Ok(Packet::Payload(seq, ack, data)) => match self.clients.find_by_addrs(src) {
                     Some(conn) => {
+                        let id = conn.id;
                         let result = &mut payload[..data.len()];
                         result.copy_from_slice(data);
                         conn.on_receive();
-                        Ok(Some(ServerEvent::Packet(conn.id, result)))
+                        conn.handle_seq(seq);
+                        conn.handle_ack(ack, |i|self.ack_queue.push_back((id, i)));
+                        Ok(Some(ServerEvent::PacketReceived(id, seq, result)))
                     },
                     None => self.next_event(payload)
                 },
@@ -201,14 +210,14 @@ impl<U: UdpSocketImpl> Server<U> {
 
     pub fn broadcast(&mut self, payload: &[u8]) -> Result<()> {
         for conn in self.clients.connections_mut() {
-            self.socket.send_with(Packet::Payload(payload), conn)?;
+            self.socket.send_payload(payload, conn)?;
         }
         Ok(())
     }
 
-    pub fn send(&mut self, client_id: u16, payload: &[u8]) -> Result<()> {
+    pub fn send(&mut self, client_id: u16, payload: &[u8]) -> Result<SequenceNumber> {
         match self.clients.get_mut(client_id) {
-            ClientState::Connected(conn) => self.socket.send_with(Packet::Payload(payload), conn),
+            ClientState::Connected(conn) => self.socket.send_payload(payload, conn),
             _ => Err(Error::new(ErrorKind::NotConnected, "client not connected"))
         }
     }

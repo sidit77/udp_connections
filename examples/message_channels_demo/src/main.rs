@@ -30,7 +30,7 @@ fn client() {
                     println ! ("{} Disconnected: {:?}", prefix, reason);
                     break 'outer
                 },
-                ClientEvent::Packet(payload) => {
+                ClientEvent::PacketReceived(payload) => {
                     for payload in msg_channel.read(payload, |s|println!("got ack: {}", s)) {
                         let mut payload = &*payload;
                         let val = payload.read_u32::<BigEndian>().unwrap();
@@ -89,7 +89,7 @@ fn main(){
                         break 'outer;
                     }
                 },
-                ServerEvent::Packet(client_id, payload) => {
+                ServerEvent::PacketReceived(client_id, payload) => {
                     let msg_channel = msg_channels.get_mut(&client_id).unwrap();
                     for payload in msg_channel.read(payload, |_|{}) {
                         let mut payload = &*payload;

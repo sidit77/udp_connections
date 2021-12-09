@@ -1,6 +1,7 @@
 use std::io::{Cursor, Error, ErrorKind, Result, Write};
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
 use crc32fast::Hasher;
+use crate::sequencing::{SequenceNumber, SequenceNumberSet};
 
 fn assert(v: bool, reason: &str) -> Result<()> {
     if v {
@@ -17,7 +18,7 @@ pub enum Packet<'a> {
     ConnectionDenied,
     KeepAlive,
     Disconnect,
-    Payload(&'a [u8])
+    Payload(SequenceNumber, SequenceNumberSet, &'a [u8])
 }
 
 impl<'a> Packet<'a> {
@@ -36,11 +37,16 @@ impl<'a> Packet<'a> {
             0x02 => Ok(Packet::ConnectionDenied),
             0x03 => Ok(Packet::KeepAlive),
             0x04 => Ok(Packet::Disconnect),
-            0x05 => Ok(Packet::Payload({
+            0x05 => Ok({
+                let sequence = data.read_u16::<NetworkEndian>()?;
+                let ack = SequenceNumberSet::from_bitfield(
+                    data.read_u16::<NetworkEndian>()?,
+                    data.read_u32::<NetworkEndian>()?
+                );
                 let len = data.read_u16::<NetworkEndian>()? as usize;
                 assert(len == data.len(), "wrong packet size")?;
-                data
-            })),
+                Packet::Payload(sequence, ack, data)
+            }),
             _ => Err(Error::new(ErrorKind::InvalidData, "Invalid packet id"))
         }
     }
@@ -67,8 +73,11 @@ impl<'a> Packet<'a> {
             Packet::Disconnect => {
                 data.write_u8(0x04)?;
             },
-            Packet::Payload(payload) => {
+            Packet::Payload(sequence, ack, payload) => {
                 data.write_u8(0x05)?;
+                data.write_u16::<NetworkEndian>(*sequence)?;
+                data.write_u16::<NetworkEndian>(ack.latest())?;
+                data.write_u32::<NetworkEndian>(ack.bitfield())?;
                 data.write_u16::<NetworkEndian>(payload.len() as u16)?;
                 data.write_all(payload)?;
             }
@@ -87,12 +96,13 @@ impl<'a> Packet<'a> {
 #[cfg(test)]
 mod tests {
     use crate::packets::{Packet};
+    use crate::sequencing::SequenceNumberSet;
 
     const SALT: [u8; 4] = 123456u32.to_be_bytes();
 
     #[test]
     fn test_packets() {
-        let mut buffer = [0u8; 10];
+        let mut buffer = [0u8; 128];
 
         let test_cases = [
             Packet::ConnectionRequest,
@@ -100,7 +110,7 @@ mod tests {
             Packet::ConnectionDenied,
             Packet::KeepAlive,
             Packet::Disconnect,
-            Packet::Payload(&[1,2,3])
+            Packet::Payload(0, SequenceNumberSet::new(0), &[1,2,3])
         ];
 
         for test in test_cases {

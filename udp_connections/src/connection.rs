@@ -3,6 +3,7 @@ use std::io::Result;
 use std::time::Instant;
 use crate::MAX_PACKET_SIZE;
 use crate::packets::Packet;
+use crate::sequencing::{SequenceBuffer, SequenceNumber, SequenceNumberSet};
 use crate::socket::UdpSocketImpl;
 
 #[derive(Debug)]
@@ -39,18 +40,30 @@ impl<U> PacketSocket<U> where U: UdpSocketImpl {
     }
 
     pub fn send_with(&mut self, packet: Packet, connection: &mut VirtualConnection) -> Result<()> {
-        connection.on_send();
+        connection.last_send_packet = Instant::now();
         self.send_to(packet, connection.addrs)
+    }
+
+    pub fn send_payload(&mut self, payload: &[u8], connection: &mut VirtualConnection) -> Result<SequenceNumber> {
+        let seq = connection.sent_packets.insert(PacketInformation);
+        let ack = connection.received_packets;
+        self.send_with(Packet::Payload(seq, ack, payload), connection)?;
+        Ok(seq)
     }
 
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Default)]
+struct PacketInformation;
+
+#[derive(Debug, Clone)]
 pub struct VirtualConnection {
     pub addrs: SocketAddr,
     pub id: u16,
     pub last_received_packet: Instant,
-    pub last_send_packet: Instant
+    pub last_send_packet: Instant,
+    received_packets: SequenceNumberSet,
+    sent_packets: SequenceBuffer<PacketInformation>
 }
 
 impl VirtualConnection {
@@ -59,16 +72,26 @@ impl VirtualConnection {
             addrs,
             id,
             last_received_packet: Instant::now(),
-            last_send_packet: Instant::now()
+            last_send_packet: Instant::now(),
+            received_packets: SequenceNumberSet::new(0),
+            sent_packets: SequenceBuffer::with_capacity(64)
         }
-    }
-
-    pub fn on_send(&mut self) {
-        self.last_send_packet = Instant::now();
     }
 
     pub fn on_receive(&mut self) {
         self.last_received_packet = Instant::now();
+    }
+
+    pub fn handle_seq(&mut self, seq: SequenceNumber) {
+        self.received_packets.insert(seq)
+    }
+
+    pub fn handle_ack<F>(&mut self, ack: SequenceNumberSet, mut callback: F) where F: FnMut(SequenceNumber) {
+        for seq in ack.iter() {
+            if let Some(_) = self.sent_packets.remove(seq) {
+                callback(seq);
+            }
+        }
     }
 
 }

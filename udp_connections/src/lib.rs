@@ -4,6 +4,7 @@ mod client;
 mod constants;
 mod server;
 mod connection;
+mod sequencing;
 
 pub use client::{ClientEvent, ClientDisconnectReason};
 pub use server::{ServerEvent, ServerDisconnectReason};

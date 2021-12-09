@@ -26,16 +26,20 @@ fn client() {
                     println ! ("{} Disconnected: {:?}", prefix, reason);
                     break 'outer
                 },
-                ClientEvent::Packet(mut payload) => {
+                ClientEvent::PacketReceived(mut payload) => {
                     let val = payload.read_u32::<BigEndian>().unwrap();
                     println ! ("{} Packet {}", prefix, val);
+                },
+                ClientEvent::PacketAcknowledged(seq) => {
+                    println!("{} got acknowledged", seq)
                 }
             }
         }
 
         if socket.is_connected() {
             if i % 5 == 0 {
-                socket.send(&(i / 5).to_be_bytes()).unwrap();
+                let seq = socket.send(&(i / 5 + 1).to_be_bytes()).unwrap();
+                println!("Sent {}", seq);
                 if i > 100 {
                     socket.disconnect().unwrap();
                 }
@@ -76,11 +80,12 @@ fn main(){
                         break 'outer;
                     }
                 },
-                ServerEvent::Packet(client_id, mut payload) => {
+                ServerEvent::PacketReceived(client_id, _, mut payload) => {
                     let val = payload.read_u32::<BigEndian>().unwrap();
                     println!("{} Packet {} from {}", prefix, val, client_id);
                     socket.send(client_id, &val.to_be_bytes()).unwrap();
-                }
+                },
+                ServerEvent::PacketAcknowledged(_, _) => {}
             }
         }
         //if i % 10 == 0 {

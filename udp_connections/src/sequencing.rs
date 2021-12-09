@@ -1,6 +1,7 @@
 use std::fmt::{Debug, Formatter};
 pub type SequenceNumber = u16;
 
+#[derive(Clone)]
 pub struct SequenceBuffer<T> {
     last_sequence_number: SequenceNumber,
     entries: Box<[Option<(SequenceNumber, T)>]>
@@ -72,7 +73,7 @@ pub fn sequence_less_than(s1: SequenceNumber, s2: SequenceNumber) -> bool {
 
 type SequenceBitfield = u32;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq)]
 pub struct SequenceNumberSet {
     latest: SequenceNumber,
     bitfield: SequenceBitfield
@@ -168,7 +169,7 @@ impl Debug for SequenceNumberSet {
 mod tests {
 
     mod sequence_buffer {
-        use crate::SequenceBuffer;
+        use crate::sequencing::SequenceBuffer;
 
         #[test]
         fn test_insert_remove() {
