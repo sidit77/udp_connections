@@ -24,7 +24,7 @@ pub enum ServerEvent<'a> {
 }
 
 #[derive(Debug, Clone)]
-enum ClientState {
+pub enum ClientState {
     Disconnected,
     Connected(VirtualConnection),
     Disconnecting
@@ -54,7 +54,7 @@ impl ClientState {
 }
 
 #[derive(Debug)]
-struct ConnectionManager(Box<[ClientState]>);
+pub struct ConnectionManager(Box<[ClientState]>);
 
 impl ConnectionManager {
 
@@ -64,7 +64,7 @@ impl ConnectionManager {
         }
     }
 
-    fn get_mut(&mut self, id: u16) -> &mut ClientState {
+    pub fn get_mut(&mut self, id: u16) -> &mut ClientState {
         &mut self.0[id as usize]
     }
 
@@ -99,8 +99,8 @@ impl ConnectionManager {
 
 #[derive(Debug)]
 pub struct Server<U: UdpSocketImpl> {
-    socket: PacketSocket<U>,
-    clients: ConnectionManager,
+    pub socket: PacketSocket<U>,
+    pub clients: ConnectionManager,
     ack_queue: VecDeque<(u16, SequenceNumber)>
 }
 

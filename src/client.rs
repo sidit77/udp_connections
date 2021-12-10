@@ -24,7 +24,7 @@ pub enum ClientEvent<'a> {
 }
 
 #[derive(Debug, Clone)]
-enum ClientState {
+pub enum ClientState {
     Disconnected,
     Connecting(SocketAddr, Instant),
     Connected(VirtualConnection),
@@ -33,8 +33,8 @@ enum ClientState {
 
 #[derive(Debug)]
 pub struct Client<U: UdpSocketImpl> {
-    socket: PacketSocket<U>,
-    state: ClientState,
+    pub socket: PacketSocket<U>,
+    pub state: ClientState,
     ack_queue: VecDeque<SequenceNumber>
 }
 

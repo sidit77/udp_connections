@@ -45,7 +45,7 @@ impl<U> PacketSocket<U> where U: UdpSocketImpl {
     }
 
     pub fn send_payload(&mut self, payload: &[u8], connection: &mut VirtualConnection) -> Result<SequenceNumber> {
-        let seq = connection.sent_packets.insert(PacketInformation);
+        let seq = connection.create_sequence_number();
         let ack = connection.received_packets;
         self.send_with(Packet::Payload(seq, ack, payload), connection)?;
         Ok(seq)
@@ -96,6 +96,7 @@ impl VirtualConnection {
     }
 
     pub fn handle_seq(&mut self, seq: SequenceNumber) {
+        //TODO Prevent duplicates
         self.received_packets.insert(seq)
     }
 
@@ -105,6 +106,14 @@ impl VirtualConnection {
                 callback(seq);
             }
         }
+    }
+
+    pub fn create_sequence_number(&mut self) -> SequenceNumber {
+        self.sent_packets.insert(PacketInformation)
+    }
+
+    pub fn get_received_packets(&self) -> SequenceNumberSet {
+        self.received_packets
     }
 
 }

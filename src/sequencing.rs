@@ -51,6 +51,14 @@ impl<T: Clone> SequenceBuffer<T> {
         }
     }
 
+    pub fn iter_mut(&mut self) -> impl Iterator<Item=(SequenceNumber, &mut T)> {
+        self.entries.iter_mut().filter_map(|e|e.as_mut().map(|(i, t)|(*i, t)))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item=(SequenceNumber, &T)> {
+        self.entries.iter().filter_map(|e|e.as_ref().map(|(i, t)|(*i, t)))
+    }
+
     fn next_sequence_number(&mut self) -> SequenceNumber {
         self.last_sequence_number = self.last_sequence_number.wrapping_add(1);
         self.last_sequence_number

@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::time::Duration;
 use byteorder::{BigEndian, ReadBytesExt};
-use udp_connections::{ClientEvent, ConditionedUdpClient, ConditionedUdpServer, MAX_PACKET_SIZE, NetworkOptions, ServerEvent};
+use udp_connections::{ClientEvent, ClientState, ConditionedUdpClient, ConditionedUdpServer, MAX_PACKET_SIZE, MessageChannel, NetworkOptions, ServerEvent, ServerState};
 
 const SERVER: &str = "127.0.0.1:23452";
 const IDENTIFIER: &str = "udp_connections_demo";
@@ -15,34 +17,60 @@ fn client() {
     println!("{} starting up", prefix);
     socket.connect(SERVER).unwrap();
 
+    let mut msg_channel = None;
     let mut buffer = [0u8; MAX_PACKET_SIZE];
     let mut i = 0u32;
     'outer: loop {
         socket.update().unwrap();
         while let Some(event) = socket.next_event(&mut buffer).unwrap() {
             match event {
-                ClientEvent::Connected(id) => println!("{} Connected as {}", prefix, id),
+                ClientEvent::Connected(id) => {
+                    println!("{} Connected as {}", prefix, id);
+                    msg_channel = Some(MessageChannel::new());
+                },
                 ClientEvent::Disconnected(reason) => {
                     println ! ("{} Disconnected: {:?}", prefix, reason);
+                    msg_channel = None;
                     break 'outer
                 },
                 ClientEvent::PacketReceived(_, mut payload) => {
-                    let val = payload.read_u32::<BigEndian>().unwrap();
-                    println ! ("{} Packet {}", prefix, val);
+                    //let val = payload.read_u32::<BigEndian>().unwrap();
+                    let mc = &mut msg_channel.as_mut().unwrap();
+                    mc.on_receive(payload).unwrap();
+                    while let Some(packet) = mc.receive_message() {
+                        let mut packet= packet.as_ref();
+                        let val = packet.read_u32::<BigEndian>().unwrap();
+                        println ! ("{} Packet {}", prefix, val);
+                        if val >= 20 {
+                            socket.disconnect().unwrap();
+                        }
+                    }
+
                 },
                 ClientEvent::PacketAcknowledged(seq) => {
-                    println!("{} got acknowledged", seq)
+                    //println!("{} got acknowledged", seq);
+                    msg_channel.as_mut().unwrap().on_ack(seq);
                 }
             }
         }
 
+        if let Some(mc) = msg_channel.as_mut(){
+            if mc.has_unsend_messages() {
+                match &mut socket.state {
+                    ClientState::Connected(vc) => socket.socket.send_with(
+                        mc.send_packets(vc).unwrap(), vc).unwrap(),
+                    _ => {}
+                }
+            }
+        }
+
+
         if socket.is_connected() {
             if i % 5 == 0 {
-                let seq = socket.send(&(i / 5 + 1).to_be_bytes()).unwrap();
-                println!("Sent {}", seq);
-                if i > 100 {
-                    socket.disconnect().unwrap();
-                }
+                //let seq = socket.send(&(i / 5 + 1).to_be_bytes()).unwrap();
+                //println!("Sent {}", seq);
+                msg_channel.as_mut().unwrap().queue_message(&(i / 5 + 1).to_be_bytes());
+
             }
             i += 1;
         }
@@ -60,34 +88,56 @@ fn main(){
     //let _ = std::thread::spawn(self::client);
 
     let mut socket = ConditionedUdpServer::listen(
-        SERVER, IDENTIFIER, 1, NetworkOptions {
-            packet_loss: 0.2,
-            ..NETWORK_CONFIG
-        }).unwrap();
+        SERVER, IDENTIFIER, 1, NETWORK_CONFIG).unwrap();
     let prefix = format!("[Server {}]", socket.local_addr().unwrap());
 
+    let mut message_channels = HashMap::new();
     //let mut i = 0u32;
     let mut buffer = [0u8; MAX_PACKET_SIZE];
     'outer: loop  {
         socket.update().unwrap();
         while let Some(event) = socket.next_event(&mut buffer).unwrap() {
             match event {
-                ServerEvent::ClientConnected(client_id) =>
-                    println!("{} Client {} connected", prefix, client_id),
+                ServerEvent::ClientConnected(client_id) => {
+                    println!("{} Client {} connected", prefix, client_id);
+                    message_channels.insert(client_id, MessageChannel::new());
+                },
                 ServerEvent::ClientDisconnected(client_id, reason) => {
                     println!("{} Client {} disconnected: {:?}", prefix, client_id, reason);
+                    message_channels.remove(&client_id);
                     if socket.connected_clients().count() == 0 {
                         break 'outer;
                     }
                 },
                 ServerEvent::PacketReceived(client_id, _, mut payload) => {
-                    let val = payload.read_u32::<BigEndian>().unwrap();
-                    println!("{} Packet {} from {}", prefix, val, client_id);
-                    socket.send(client_id, &val.to_be_bytes()).unwrap();
+                    //let val = payload.read_u32::<BigEndian>().unwrap();
+                    //println!("{} Packet {} from {}", prefix, val, client_id);
+                    //socket.send(client_id, &val.to_be_bytes()).unwrap();
+                    let mc = &mut message_channels.get_mut(&client_id).unwrap();
+                    mc.on_receive(payload).unwrap();
+                    while let Some(packet) = mc.receive_message() {
+                        let mut packet= packet.as_ref();
+                        let val = packet.read_u32::<BigEndian>().unwrap();
+                        // println ! ("{} Packet {} from {}", prefix, val, client_id);
+                        mc.queue_message(&val.to_be_bytes());
+                    }
                 },
-                ServerEvent::PacketAcknowledged(_, _) => {}
+                ServerEvent::PacketAcknowledged(client_id, seq) => {
+                    message_channels.get_mut(&client_id).unwrap().on_ack(seq);
+                }
             }
         }
+
+        for (id, channel) in message_channels.iter_mut() {
+            if channel.has_unsend_messages() {
+                match socket.clients.get_mut(*id) {
+                    ServerState::Connected(conn) => socket.socket.send_with(
+                        channel.send_packets(conn).unwrap(), conn).unwrap(),
+                    _ => {  }
+                }
+            }
+        }
+
         //if i % 10 == 0 {
         //    socket.broadcast(&i.to_be_bytes()).unwrap();
         //}
