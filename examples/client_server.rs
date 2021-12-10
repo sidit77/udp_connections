@@ -1,8 +1,7 @@
 use std::collections::HashMap;
-use std::io::ErrorKind;
 use std::time::Duration;
 use byteorder::{BigEndian, ReadBytesExt};
-use udp_connections::{ClientEvent, ClientState, ConditionedUdpClient, ConditionedUdpServer, MAX_PACKET_SIZE, MessageChannel, NetworkOptions, ServerEvent, ServerState};
+use udp_connections::{ClientEvent, ConditionedUdpClient, ConditionedUdpServer, MAX_PACKET_SIZE, MessageChannel, NetworkOptions, ServerEvent};
 
 const SERVER: &str = "127.0.0.1:23452";
 const IDENTIFIER: &str = "udp_connections_demo";
@@ -33,7 +32,7 @@ fn client() {
                     msg_channel = None;
                     break 'outer
                 },
-                ClientEvent::PacketReceived(_, mut payload) => {
+                ClientEvent::PacketReceived(_, payload) => {
                     //let val = payload.read_u32::<BigEndian>().unwrap();
                     let mc = &mut msg_channel.as_mut().unwrap();
                     mc.on_receive(payload).unwrap();
@@ -56,11 +55,7 @@ fn client() {
 
         if let Some(mc) = msg_channel.as_mut(){
             if mc.has_unsend_messages() {
-                match &mut socket.state {
-                    ClientState::Connected(vc) => socket.socket.send_with(
-                        mc.send_packets(vc).unwrap(), vc).unwrap(),
-                    _ => {}
-                }
+                socket.send(mc.send_packets(socket.next_sequence_number().unwrap()).unwrap()).unwrap();
             }
         }
 
@@ -109,7 +104,7 @@ fn main(){
                         break 'outer;
                     }
                 },
-                ServerEvent::PacketReceived(client_id, _, mut payload) => {
+                ServerEvent::PacketReceived(client_id, _, payload) => {
                     //let val = payload.read_u32::<BigEndian>().unwrap();
                     //println!("{} Packet {} from {}", prefix, val, client_id);
                     //socket.send(client_id, &val.to_be_bytes()).unwrap();
@@ -130,11 +125,9 @@ fn main(){
 
         for (id, channel) in message_channels.iter_mut() {
             if channel.has_unsend_messages() {
-                match socket.clients.get_mut(*id) {
-                    ServerState::Connected(conn) => socket.socket.send_with(
-                        channel.send_packets(conn).unwrap(), conn).unwrap(),
-                    _ => {  }
-                }
+                socket.send(*id,
+                            channel.send_packets(
+                                socket.next_sequence_number(*id).unwrap()).unwrap()).unwrap();
             }
         }
 

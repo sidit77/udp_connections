@@ -24,7 +24,7 @@ pub enum ClientEvent<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub enum ClientState {
+enum ClientState {
     Disconnected,
     Connecting(SocketAddr, Instant),
     Connected(VirtualConnection),
@@ -33,8 +33,8 @@ pub enum ClientState {
 
 #[derive(Debug)]
 pub struct Client<U: UdpSocketImpl> {
-    pub socket: PacketSocket<U>,
-    pub state: ClientState,
+    socket: PacketSocket<U>,
+    state: ClientState,
     ack_queue: VecDeque<SequenceNumber>
 }
 
@@ -165,6 +165,13 @@ impl<U: UdpSocketImpl> Client<U> {
     pub fn send(&mut self, payload: &[u8]) -> Result<SequenceNumber> {
         match &mut self.state {
             ClientState::Connected(vc) => self.socket.send_payload(payload, vc),
+            _ => Err(Error::new(ErrorKind::NotConnected, "not connected to a server"))
+        }
+    }
+
+    pub fn next_sequence_number(&self) -> Result<SequenceNumber> {
+        match &self.state {
+            ClientState::Connected(vc) => Ok(vc.get_next_sequence()),
             _ => Err(Error::new(ErrorKind::NotConnected, "not connected to a server"))
         }
     }

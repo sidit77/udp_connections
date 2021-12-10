@@ -37,6 +37,7 @@ impl<T: Clone> SequenceBuffer<T> {
         let sequence_number = self.next_sequence_number();
         let index = self.index(sequence_number);
         self.entries[index] = Some((sequence_number, data));
+        self.last_sequence_number = sequence_number;
         sequence_number
     }
 
@@ -59,9 +60,8 @@ impl<T: Clone> SequenceBuffer<T> {
         self.entries.iter().filter_map(|e|e.as_ref().map(|(i, t)|(*i, t)))
     }
 
-    fn next_sequence_number(&mut self) -> SequenceNumber {
-        self.last_sequence_number = self.last_sequence_number.wrapping_add(1);
-        self.last_sequence_number
+    pub fn next_sequence_number(&self) -> SequenceNumber {
+        self.last_sequence_number.wrapping_add(1)
     }
 
     fn index(&self, sequence: SequenceNumber) -> usize {

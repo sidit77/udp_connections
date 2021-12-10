@@ -1,8 +1,6 @@
 use std::io::{Read, Write};
 use std::io::Result;
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
-use crate::connection::{PacketSocket, VirtualConnection};
-use crate::packets::Packet;
 use crate::sequencing::{sequence_greater_than, sequence_less_than, SequenceBuffer, SequenceNumber};
 
 #[derive(Clone, Default)]
@@ -79,10 +77,8 @@ impl MessageChannel {
         }
     }
 
-    pub fn send_packets(&mut self, connection: &mut VirtualConnection) -> Result<Packet> {
+    pub fn send_packets(&mut self, seq: SequenceNumber) -> Result<&[u8]> {
         let packet = &mut self.buffer;
-        let seq = connection.create_sequence_number();
-        let ack = connection.get_received_packets();
 
         packet.clear();
         packet.write_u8(0)?;
@@ -95,7 +91,7 @@ impl MessageChannel {
             msg.sequence_number.push(seq);
         }
 
-        Ok(Packet::Payload(seq, ack, packet.as_slice()))
+        Ok(packet.as_slice())
     }
 
     pub fn has_unsend_messages(&self) -> bool {

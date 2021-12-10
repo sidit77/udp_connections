@@ -24,7 +24,7 @@ pub enum ServerEvent<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub enum ClientState {
+enum ClientState {
     Disconnected,
     Connected(VirtualConnection),
     Disconnecting
@@ -54,7 +54,7 @@ impl ClientState {
 }
 
 #[derive(Debug)]
-pub struct ConnectionManager(Box<[ClientState]>);
+struct ConnectionManager(Box<[ClientState]>);
 
 impl ConnectionManager {
 
@@ -64,7 +64,11 @@ impl ConnectionManager {
         }
     }
 
-    pub fn get_mut(&mut self, id: u16) -> &mut ClientState {
+    fn get(&self, id: u16) -> &ClientState {
+        &self.0[id as usize]
+    }
+
+    fn get_mut(&mut self, id: u16) -> &mut ClientState {
         &mut self.0[id as usize]
     }
 
@@ -99,8 +103,8 @@ impl ConnectionManager {
 
 #[derive(Debug)]
 pub struct Server<U: UdpSocketImpl> {
-    pub socket: PacketSocket<U>,
-    pub clients: ConnectionManager,
+    socket: PacketSocket<U>,
+    clients: ConnectionManager,
     ack_queue: VecDeque<(u16, SequenceNumber)>
 }
 
@@ -234,6 +238,13 @@ impl<U: UdpSocketImpl> Server<U> {
                 *state = ClientState::Disconnecting;
                 Ok(())
             },
+            _ => Err(Error::new(ErrorKind::NotConnected, "client not connected"))
+        }
+    }
+
+    pub fn next_sequence_number(&self, client_id: u16) -> Result<SequenceNumber> {
+        match self.clients.get(client_id) {
+            ClientState::Connected(conn) => Ok(conn.get_next_sequence()),
             _ => Err(Error::new(ErrorKind::NotConnected, "client not connected"))
         }
     }
