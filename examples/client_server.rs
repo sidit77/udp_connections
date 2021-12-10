@@ -26,7 +26,7 @@ fn client() {
                     println ! ("{} Disconnected: {:?}", prefix, reason);
                     break 'outer
                 },
-                ClientEvent::PacketReceived(mut payload) => {
+                ClientEvent::PacketReceived(_, mut payload) => {
                     let val = payload.read_u32::<BigEndian>().unwrap();
                     println ! ("{} Packet {}", prefix, val);
                 },

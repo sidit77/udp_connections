@@ -19,7 +19,7 @@ pub enum ClientDisconnectReason {
 pub enum ClientEvent<'a> {
     Connected(u16),
     Disconnected(ClientDisconnectReason),
-    PacketReceived(&'a [u8]),
+    PacketReceived(SequenceNumber, &'a [u8]),
     PacketAcknowledged(SequenceNumber)
 }
 
@@ -142,7 +142,7 @@ impl<U: UdpSocketImpl> Client<U> {
                         vc.on_receive();
                         vc.handle_seq(seq);
                         vc.handle_ack(ack, |i|self.ack_queue.push_back(i));
-                        Ok(Some(ClientEvent::PacketReceived(result)))
+                        Ok(Some(ClientEvent::PacketReceived(seq, result)))
                     },
                     Ok(Packet::KeepAlive(ack)) => {
                         vc.on_receive();
