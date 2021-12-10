@@ -69,7 +69,7 @@ impl ConnectionManager {
     }
 
     fn find_by_addrs(&mut self, addrs: SocketAddr) -> Option<&mut VirtualConnection> {
-        self.connections_mut().find(|c| c.addrs == addrs)
+        self.connections_mut().find(|c| c.addrs() == addrs)
     }
 
     fn create_new_connection(&mut self, addrs: SocketAddr) -> Option<&mut VirtualConnection> {
@@ -142,7 +142,7 @@ impl<U: UdpSocketImpl> Server<U> {
             let disconnect_client = self.clients.slots_mut().filter_map(|(id, state)|match state {
                 ClientState::Disconnecting => Some((id, ServerDisconnectReason::Disconnected)),
                 ClientState::Connected(v) if (now - v.last_received_packet) > CONNECTION_TIMEOUT
-                                              => Some((v.id, ServerDisconnectReason::TimedOut)),
+                                              => Some((v.id(), ServerDisconnectReason::TimedOut)),
                 _ => None
             }).next();
             if let Some((id, reason)) = disconnect_client{
@@ -160,19 +160,19 @@ impl<U: UdpSocketImpl> Server<U> {
                             self.next_event(payload)
                         },
                         Some(conn) => {
-                            self.socket.send_with(Packet::ConnectionAccepted(conn.id), conn)?;
-                            Ok(Some(ServerEvent::ClientConnected(conn.id)))
+                            self.socket.send_with(Packet::ConnectionAccepted(conn.id()), conn)?;
+                            Ok(Some(ServerEvent::ClientConnected(conn.id())))
                         }
                     },
                     Some(conn) => {
                         conn.on_receive();
-                        self.socket.send_with(Packet::ConnectionAccepted(conn.id), conn)?;
+                        self.socket.send_with(Packet::ConnectionAccepted(conn.id()), conn)?;
                         self.next_event(payload)
                     }
                 },
                 Ok(Packet::Payload(seq, ack, data)) => match self.clients.find_by_addrs(src) {
                     Some(conn) => {
-                        let id = conn.id;
+                        let id = conn.id();
                         let result = &mut payload[..data.len()];
                         result.copy_from_slice(data);
                         conn.on_receive();
@@ -184,7 +184,7 @@ impl<U: UdpSocketImpl> Server<U> {
                 },
                 Ok(Packet::KeepAlive(ack)) => match self.clients.find_by_addrs(src) {
                     Some(conn) => {
-                        let id = conn.id;
+                        let id = conn.id();
                         conn.on_receive();
                         conn.handle_ack(ack, |i|self.ack_queue.push_back((id, i)));
                         self.next_event(payload)
@@ -193,7 +193,7 @@ impl<U: UdpSocketImpl> Server<U> {
                 },
                 Ok(Packet::Disconnect) => match self.clients.find_by_addrs(src) {
                     Some(conn) => {
-                        let id = conn.id;
+                        let id = conn.id();
                         *self.clients.get_mut(id) = ClientState::Disconnected;
                         Ok(Some(ServerEvent::ClientDisconnected(id, ServerDisconnectReason::Disconnected)))
                     },
@@ -207,7 +207,7 @@ impl<U: UdpSocketImpl> Server<U> {
     }
 
     pub fn connected_clients(&self) -> impl Iterator<Item=u16> +'_ {
-        self.clients.connections().map(|v|v.id)
+        self.clients.connections().map(|v|v.id())
     }
 
     pub fn broadcast(&mut self, payload: &[u8]) -> Result<()> {

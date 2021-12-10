@@ -63,8 +63,8 @@ struct PacketInformation;
 
 #[derive(Debug, Clone)]
 pub struct VirtualConnection {
-    pub addrs: SocketAddr,
-    pub id: u16,
+    addrs: SocketAddr,
+    id: u16,
     pub last_received_packet: Instant,
     pub last_send_packet: Instant,
     received_packets: SequenceNumberSet,
@@ -81,6 +81,14 @@ impl VirtualConnection {
             received_packets: SequenceNumberSet::new(0),
             sent_packets: SequenceBuffer::with_capacity(64)
         }
+    }
+
+    pub fn id(&self) -> u16 {
+        self.id
+    }
+
+    pub fn addrs(&self) -> SocketAddr {
+        self.addrs
     }
 
     pub fn on_receive(&mut self) {

@@ -56,7 +56,7 @@ impl<U: UdpSocketImpl> Client<U> {
         match &self.state {
             ClientState::Disconnected => None,
             ClientState::Connecting(addrs, _) => Some(*addrs),
-            ClientState::Connected(vc) => Some(vc.addrs),
+            ClientState::Connected(vc) => Some(vc.addrs()),
             ClientState::Disconnecting => None,
         }
     }
@@ -135,7 +135,7 @@ impl<U: UdpSocketImpl> Client<U> {
                     }
                     _ => self.next_event(payload)
                 },
-                ClientState::Connected(ref mut vc) if vc.addrs == src => match packet{
+                ClientState::Connected(ref mut vc) if vc.addrs() == src => match packet{
                     Ok(Packet::Payload(seq, ack, data)) => {
                         let result = &mut payload[..data.len()];
                         result.copy_from_slice(data);
