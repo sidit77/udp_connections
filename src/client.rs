@@ -137,12 +137,15 @@ impl<U: UdpSocketImpl> Client<U> {
                 },
                 ClientState::Connected(ref mut vc) if vc.addrs() == src => match packet{
                     Ok(Packet::Payload(seq, ack, data)) => {
-                        let result = &mut payload[..data.len()];
-                        result.copy_from_slice(data);
-                        vc.on_receive();
-                        vc.handle_seq(seq);
-                        vc.handle_ack(ack, |i|self.ack_queue.push_back(i));
-                        Ok(Some(ClientEvent::PacketReceived(seq, result)))
+                        if vc.handle_seq(seq) {
+                            vc.on_receive();
+                            vc.handle_ack(ack, |i|self.ack_queue.push_back(i));
+                            let result = &mut payload[..data.len()];
+                            result.copy_from_slice(data);
+                            Ok(Some(ClientEvent::PacketReceived(seq, result)))
+                        } else {
+                            self.next_event(payload)
+                        }
                     },
                     Ok(Packet::KeepAlive(ack)) => {
                         vc.on_receive();

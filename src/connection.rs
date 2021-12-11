@@ -95,8 +95,7 @@ impl VirtualConnection {
         self.last_received_packet = Instant::now();
     }
 
-    pub fn handle_seq(&mut self, seq: SequenceNumber) {
-        //TODO Prevent duplicates
+    pub fn handle_seq(&mut self, seq: SequenceNumber) -> bool {
         self.received_packets.insert(seq)
     }
 

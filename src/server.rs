@@ -176,13 +176,16 @@ impl<U: UdpSocketImpl> Server<U> {
                 },
                 Ok(Packet::Payload(seq, ack, data)) => match self.clients.find_by_addrs(src) {
                     Some(conn) => {
-                        let id = conn.id();
-                        let result = &mut payload[..data.len()];
-                        result.copy_from_slice(data);
-                        conn.on_receive();
-                        conn.handle_seq(seq);
-                        conn.handle_ack(ack, |i|self.ack_queue.push_back((id, i)));
-                        Ok(Some(ServerEvent::PacketReceived(id, seq, result)))
+                        if conn.handle_seq(seq) {
+                            let id = conn.id();
+                            conn.handle_ack(ack, |i|self.ack_queue.push_back((id, i)));
+                            conn.on_receive();
+                            let result = &mut payload[..data.len()];
+                            result.copy_from_slice(data);
+                            Ok(Some(ServerEvent::PacketReceived(id, seq, result)))
+                        } else {
+                            self.next_event(payload)
+                        }
                     },
                     None => self.next_event(payload)
                 },

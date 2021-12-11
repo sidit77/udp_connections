@@ -73,6 +73,7 @@ fn client() {
         std::thread::sleep(Duration::from_secs_f32(0.05));
     }
 
+    assert!(msg_channel.is_none());
     std::thread::sleep(Duration::from_millis(100));
 
     println!("{} shutting down", prefix);

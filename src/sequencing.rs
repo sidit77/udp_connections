@@ -122,7 +122,7 @@ impl SequenceNumberSet {
         }
     }
 
-    pub fn insert(&mut self, sequence: SequenceNumber) {
+    pub fn insert(&mut self, sequence: SequenceNumber) -> bool {
         match sequence_greater_than(sequence, self.latest) {
             true => {
                 let offset = sequence.wrapping_sub(self.latest);
@@ -130,10 +130,15 @@ impl SequenceNumberSet {
                 self.bitfield |= 0b1;
                 self.bitfield <<= offset - 1;
                 self.latest = sequence;
+                true
             }
             false => match self.index(sequence) {
-                None => {}
-                Some(index) => self.bitfield |= 0b1 << index
+                None => false,
+                Some(index) => {
+                    let old = self.bitfield;
+                    self.bitfield |= 0b1 << index;
+                    self.bitfield != old
+                }
             }
         }
     }
@@ -225,17 +230,20 @@ mod tests {
             assert_eq!(set.latest(), 0);
             assert_eq!(set.bitfield(), 0b0);
 
-            set.insert(5);
+            assert!(set.insert(5));
             assert_eq!(set.latest(), 5);
             assert_eq!(set.bitfield(), 0b10000);
 
-            set.insert(7);
+            assert!(set.insert(7));
             assert_eq!(set.latest(), 7);
             assert_eq!(set.bitfield(), 0b1000010);
 
-            set.insert(3);
+            assert!(set.insert(3));
             assert_eq!(set.latest(), 7);
             assert_eq!(set.bitfield(), 0b1001010);
+
+            assert!(!set.insert(3));
+            assert!(!set.insert(SequenceNumber::MAX - 40));
         }
 
         #[test]
