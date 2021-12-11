@@ -1,26 +1,17 @@
 use std::fmt::{Debug, Formatter};
+
 pub type SequenceNumber = u16;
 
 #[derive(Clone)]
 pub struct SequenceBuffer<T> {
-    last_sequence_number: SequenceNumber,
-    entries: Box<[Option<(SequenceNumber, T)>]>
+    newest_sequence_number: SequenceNumber,
+    len: usize,
+    entries: Box<[Option<T>]>
 }
 
-impl<T> Debug for SequenceBuffer<T> {
+impl<T: Clone> Debug for SequenceBuffer<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let mut iter = self.entries
-            .iter()
-            .filter_map(|i|i.as_ref().map(|(j, _)|*j));
-        write!(f, "[")?;
-        if let Some(arg) = iter.next() {
-            write!(f, "{}", arg)?;
-            for arg in iter {
-                write!(f, ", {}", arg)?;
-            }
-        }
-        write!(f, "]")?;
-        Ok(())
+        f.debug_set().entries(self.iter().map(|(i, _)| i)).finish()
     }
 }
 
@@ -28,19 +19,15 @@ impl<T: Clone> SequenceBuffer<T> {
 
     pub fn with_capacity(size: usize) -> Self {
         Self {
-            last_sequence_number: 0,
+            newest_sequence_number: 0,
+            len: 0,
             entries: vec![None; size].into_boxed_slice()
         }
     }
 
     pub fn insert(&mut self, data: T) -> (SequenceNumber, Option<T>) {
-        let sequence_number = self.next_sequence_number();
-        let index = self.index(sequence_number);
-        let prev = self.entries[index]
-            .replace((sequence_number, data))
-            .map(|(_, t)|t);
-        self.last_sequence_number = sequence_number;
-        (sequence_number, prev)
+        let prev = self.remove_at(self.index(self.next_sequence_number()));
+        (self.try_insert(data).expect("This should never fail"), prev)
     }
 
     pub fn try_insert(&mut self, data: T) -> Option<SequenceNumber> {
@@ -48,8 +35,10 @@ impl<T: Clone> SequenceBuffer<T> {
         let index = self.index(sequence_number);
         match self.entries[index] {
             ref mut entry @ None => {
-                self.last_sequence_number = sequence_number;
-                *entry = Some((sequence_number, data));
+                self.newest_sequence_number = sequence_number;
+                *entry = Some(data);
+                self.len += 1;
+                debug_assert!(self.len <= self.entries.len());
                 Some(sequence_number)
             }
             Some(_) => None
@@ -57,32 +46,107 @@ impl<T: Clone> SequenceBuffer<T> {
     }
 
     pub fn remove(&mut self, sequence: SequenceNumber) -> Option<T> {
-        match &mut self.entries[self.index(sequence)] {
-            None => None,
-            Some((s, _)) if *s != sequence => None,
-            elem => match elem.take() {
-                None => unreachable!(),
-                Some((_, data)) => Some(data)
-            }
+        if sequence_greater_than(sequence, self.newest_sequence_number)
+            || sequence_less_than(sequence, self.oldest_sequence_number()) {
+            None
+        } else {
+            self.remove_at(self.index(sequence))
+        }
+
+    }
+
+    fn remove_at(&mut self, index: usize) -> Option<T> {
+        let old = self.entries[index].take();
+        while self.entries[self.index(self.oldest_sequence_number())].is_none() && self.len > 0 {
+            self.len -= 1;
+        }
+        old
+    }
+
+    fn oldest_sequence_number(&self) -> SequenceNumber {
+        self.newest_sequence_number
+            .wrapping_sub(self.len as SequenceNumber)
+            .wrapping_add(1)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn iter_mut(&mut self) -> SequenceBufferIterMut<T> {
+        SequenceBufferIterMut {
+            inner: self,
+            index: 0
         }
     }
 
-    pub fn iter_mut(&mut self) -> impl Iterator<Item=(SequenceNumber, &mut T)> {
-        self.entries.iter_mut().filter_map(|e|e.as_mut().map(|(i, t)|(*i, t)))
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item=(SequenceNumber, &T)> {
-        self.entries.iter().filter_map(|e|e.as_ref().map(|(i, t)|(*i, t)))
+    pub fn iter(&self) -> SequenceBufferIter<T> {
+        SequenceBufferIter {
+            inner: self,
+            index: 0
+        }
     }
 
     pub fn next_sequence_number(&self) -> SequenceNumber {
-        self.last_sequence_number.wrapping_add(1)
+        self.newest_sequence_number.wrapping_add(1)
     }
 
     fn index(&self, sequence: SequenceNumber) -> usize {
         sequence as usize % self.entries.len()
     }
 
+}
+
+pub struct SequenceBufferIter<'a, T> {
+    inner: &'a SequenceBuffer<T>,
+    index: usize
+}
+
+impl<'a, T: Clone> Iterator for SequenceBufferIter<'a, T> {
+    type Item = (SequenceNumber, &'a T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let b = self.inner;
+        while self.index < b.len {
+            self.index += 1;
+            let seq = b.newest_sequence_number.wrapping_sub((b.len - self.index) as SequenceNumber);
+            unsafe {
+                match b.entries.get_unchecked(b.index(seq)) {
+                    None => continue,
+                    Some(data) => return Some((seq, data))
+                }
+            }
+        }
+        None
+    }
+}
+
+pub struct SequenceBufferIterMut<'a, T: 'a> {
+    inner: &'a mut SequenceBuffer<T>,
+    index: usize
+}
+
+impl<'a, T: Clone + 'a> Iterator for SequenceBufferIterMut<'a, T>{
+    type Item = (SequenceNumber, &'a mut T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.index < self.inner.len {
+            self.index += 1;
+            let seq = self.inner.newest_sequence_number.wrapping_sub((self.inner.len - self.index) as SequenceNumber);
+            let index = self.inner.index(seq);
+            unsafe {
+                let elem = self.inner.entries.get_unchecked_mut(index);
+                // and now for some black magic
+                // the std stuff does this too, but afaik this breaks the borrow checker
+                match elem {
+                    None => continue,
+                    Some(data) => return Some((seq, &mut *(data as *mut T)))
+                }
+            }
+
+        }
+        None
+    }
 }
 
 pub fn sequence_greater_than(s1: SequenceNumber, s2: SequenceNumber) -> bool {
@@ -180,16 +244,7 @@ impl SequenceNumberSet {
 
 impl Debug for SequenceNumberSet {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let mut iter = self.iter();
-        write!(f, "[")?;
-        if let Some(arg) = iter.next() {
-            write!(f, "{}", arg)?;
-            for arg in iter {
-                write!(f, ", {}", arg)?;
-            }
-        }
-        write!(f, "]")?;
-        Ok(())
+        f.debug_set().entries(self.iter()).finish()
     }
 }
 
@@ -202,13 +257,16 @@ mod tests {
         #[test]
         fn test_insert_remove() {
             let mut buffer = SequenceBuffer::with_capacity(4);
+            assert!(buffer.is_empty());
             assert_eq!(buffer.remove(0), None);
             let (s1, _) = buffer.insert(1);
             assert_eq!(buffer.remove(s1), Some(1));
             assert_eq!(buffer.remove(s1), None);
 
             let (s1, _) = buffer.insert(1);
+            assert!(!buffer.is_empty());
             let (s2, _) = buffer.insert(2);
+            assert!(!buffer.is_empty());
             assert_eq!(buffer.remove(s1), Some(1));
             assert_eq!(buffer.remove(s2), Some(2));
 
@@ -220,8 +278,58 @@ mod tests {
             let (_, old) = buffer.insert(5);
             assert_eq!(old, Some(1));
             assert_eq!(buffer.remove(s1), None);
-
         }
+
+        #[test]
+        fn test_iter() {
+            let mut buffer = SequenceBuffer::with_capacity(4);
+            buffer.insert(1);
+            buffer.insert(2);
+            buffer.insert(3);
+
+            let mut iter = buffer.iter().map(|(i,_)|i);
+            assert_eq!(iter.next(), Some(1));
+            assert_eq!(iter.next(), Some(2));
+            assert_eq!(iter.next(), Some(3));
+            assert_eq!(iter.next(), None);
+
+            buffer.insert(4);
+            buffer.insert(5);
+            buffer.insert(6);
+
+            let mut iter = buffer.iter().map(|(i,_)|i);
+            assert_eq!(iter.next(), Some(3));
+            assert_eq!(iter.next(), Some(4));
+            assert_eq!(iter.next(), Some(5));
+            assert_eq!(iter.next(), Some(6));
+            assert_eq!(iter.next(), None);
+        }
+
+        #[test]
+        fn test_iter_mut() {
+            let mut buffer = SequenceBuffer::with_capacity(4);
+            buffer.insert(1);
+            buffer.insert(2);
+            buffer.insert(3);
+
+            let mut iter = buffer.iter_mut().map(|(i,_)|i);
+            assert_eq!(iter.next(), Some(1));
+            assert_eq!(iter.next(), Some(2));
+            assert_eq!(iter.next(), Some(3));
+            assert_eq!(iter.next(), None);
+
+            buffer.insert(4);
+            buffer.insert(5);
+            buffer.insert(6);
+
+            let mut iter = buffer.iter_mut().map(|(i,_)|i);
+            assert_eq!(iter.next(), Some(3));
+            assert_eq!(iter.next(), Some(4));
+            assert_eq!(iter.next(), Some(5));
+            assert_eq!(iter.next(), Some(6));
+            assert_eq!(iter.next(), None);
+        }
+
     }
 
     mod sequence_set {

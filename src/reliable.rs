@@ -98,7 +98,7 @@ impl MessageChannel {
     }
 
     pub fn has_unsend_messages(&self) -> bool {
-        !self.outgoing_messages.iter().next().is_none()
+        !self.outgoing_messages.is_empty()
     }
 
 }
