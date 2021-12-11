@@ -64,7 +64,7 @@ fn client() {
             if i % 5 == 0 {
                 //let seq = socket.send(&(i / 5 + 1).to_be_bytes()).unwrap();
                 //println!("Sent {}", seq);
-                msg_channel.as_mut().unwrap().queue_message(&(i / 5 + 1).to_be_bytes());
+                msg_channel.as_mut().unwrap().queue_message(&(i / 5 + 1).to_be_bytes()).unwrap();
 
             }
             i += 1;
@@ -115,7 +115,7 @@ fn main(){
                         let mut packet= packet.as_ref();
                         let val = packet.read_u32::<BigEndian>().unwrap();
                         // println ! ("{} Packet {} from {}", prefix, val, client_id);
-                        mc.queue_message(&val.to_be_bytes());
+                        mc.queue_message(&val.to_be_bytes()).unwrap();
                     }
                 },
                 ServerEvent::PacketAcknowledged(client_id, seq) => {

@@ -33,12 +33,27 @@ impl<T: Clone> SequenceBuffer<T> {
         }
     }
 
-    pub fn insert(&mut self, data: T) -> SequenceNumber {
+    pub fn insert(&mut self, data: T) -> (SequenceNumber, Option<T>) {
         let sequence_number = self.next_sequence_number();
         let index = self.index(sequence_number);
-        self.entries[index] = Some((sequence_number, data));
+        let prev = self.entries[index]
+            .replace((sequence_number, data))
+            .map(|(_, t)|t);
         self.last_sequence_number = sequence_number;
-        sequence_number
+        (sequence_number, prev)
+    }
+
+    pub fn try_insert(&mut self, data: T) -> Option<SequenceNumber> {
+        let sequence_number = self.next_sequence_number();
+        let index = self.index(sequence_number);
+        match self.entries[index] {
+            ref mut entry @ None => {
+                self.last_sequence_number = sequence_number;
+                *entry = Some((sequence_number, data));
+                Some(sequence_number)
+            }
+            Some(_) => None
+        }
     }
 
     pub fn remove(&mut self, sequence: SequenceNumber) -> Option<T> {
@@ -188,20 +203,22 @@ mod tests {
         fn test_insert_remove() {
             let mut buffer = SequenceBuffer::with_capacity(4);
             assert_eq!(buffer.remove(0), None);
-            let s1 = buffer.insert(1);
+            let (s1, _) = buffer.insert(1);
             assert_eq!(buffer.remove(s1), Some(1));
             assert_eq!(buffer.remove(s1), None);
 
-            let s1 = buffer.insert(1);
-            let s2 = buffer.insert(2);
+            let (s1, _) = buffer.insert(1);
+            let (s2, _) = buffer.insert(2);
             assert_eq!(buffer.remove(s1), Some(1));
             assert_eq!(buffer.remove(s2), Some(2));
 
-            let s1 = buffer.insert(1);
+            let (s1, _) = buffer.insert(1);
             let _ = buffer.insert(2);
             let _ = buffer.insert(3);
-            let _ = buffer.insert(4);
-            let _ = buffer.insert(5);
+            assert!(buffer.try_insert(4).is_some());
+            assert!(buffer.try_insert(5).is_none());
+            let (_, old) = buffer.insert(5);
+            assert_eq!(old, Some(1));
             assert_eq!(buffer.remove(s1), None);
 
         }

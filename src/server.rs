@@ -247,7 +247,7 @@ impl<U: UdpSocketImpl> Server<U> {
 
     pub fn next_sequence_number(&self, client_id: u16) -> Result<SequenceNumber> {
         match self.clients.get(client_id) {
-            ClientState::Connected(conn) => Ok(conn.get_next_sequence()),
+            ClientState::Connected(conn) => Ok(conn.peek_next_sequence_number()),
             _ => Err(Error::new(ErrorKind::NotConnected, "client not connected"))
         }
     }

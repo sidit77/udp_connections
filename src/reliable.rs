@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{Error, ErrorKind, Read, Write};
 use std::io::Result;
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
 use crate::sequencing::{sequence_greater_than, sequence_less_than, SequenceBuffer, SequenceNumber};
@@ -39,11 +39,14 @@ impl MessageChannel {
         }
     }
 
-    pub fn queue_message(&mut self, msg: &[u8]) {
-        self.outgoing_messages.insert(Message {
+    pub fn queue_message(&mut self, msg: &[u8]) -> Result<()>{
+        match self.outgoing_messages.try_insert(Message {
             data: msg.into(),
             sequence_number: Vec::new()
-        });
+        }) {
+            None => Err(Error::new(ErrorKind::Other, "can not queue any more messages")),
+            Some(_) => Ok(())
+        }
     }
 
     pub fn on_receive(&mut self, mut packet: &[u8]) -> Result<()> {
