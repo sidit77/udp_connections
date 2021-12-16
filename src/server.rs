@@ -245,6 +245,18 @@ impl Server {
         }
     }
 
+    pub fn disconnect_all(&mut self) -> Result<()> {
+        for (_, state) in self.clients.slots_mut() {
+            if let ClientState::Connected(conn) = state {
+                for _ in 0..10 {
+                    self.socket.send_with(Packet::Disconnect, conn)?;
+                }
+                *state = ClientState::Disconnecting;
+            }
+        }
+        Ok(())
+    }
+
     pub fn next_sequence_number(&self, client_id: u16) -> Result<SequenceNumber> {
         match self.clients.get(client_id) {
             ClientState::Connected(conn) => Ok(conn.peek_next_sequence_number()),
