@@ -215,7 +215,7 @@ impl SequenceNumberSet {
                 let offset = sequence.wrapping_sub(self.latest);
                 self.bitfield <<= 1;
                 self.bitfield |= 0b1;
-                self.bitfield <<= offset - 1;
+                self.bitfield = self.bitfield.checked_shl((offset - 1).into()).unwrap_or(0);
                 self.latest = sequence;
                 SequenceResult::Latest
             }
