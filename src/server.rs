@@ -19,7 +19,7 @@ pub enum ServerDisconnectReason {
 pub enum ServerEvent<'a> {
     ClientConnected(u16),
     ClientDisconnected(u16, ServerDisconnectReason),
-    PacketReceived(u16, SequenceNumber, &'a [u8]),
+    PacketReceived(u16, bool, &'a [u8]),
     PacketAcknowledged(u16, SequenceNumber)
 }
 
@@ -176,13 +176,13 @@ impl Server {
                 },
                 Ok(Packet::Payload(seq, ack, data)) => match self.clients.find_by_addrs(src) {
                     Some(conn) => {
-                        if conn.handle_seq(seq) {
+                        if let Some(latest) = conn.handle_seq(seq) {
                             let id = conn.id();
                             conn.handle_ack(ack, |i|self.ack_queue.push_back((id, i)));
                             conn.on_receive();
                             let result = &mut payload[..data.len()];
                             result.copy_from_slice(data);
-                            Ok(Some(ServerEvent::PacketReceived(id, seq, result)))
+                            Ok(Some(ServerEvent::PacketReceived(id, latest, result)))
                         } else {
                             self.next_event(payload)
                         }

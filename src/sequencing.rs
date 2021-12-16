@@ -158,6 +158,14 @@ pub fn sequence_less_than(s1: SequenceNumber, s2: SequenceNumber) -> bool {
     sequence_greater_than(s2, s1)
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum SequenceResult {
+    Latest,
+    Fresh,
+    Duplicate,
+    TooOld
+}
+
 type SequenceBitfield = u32;
 
 #[derive(Copy, Clone, PartialEq)]
@@ -201,7 +209,7 @@ impl SequenceNumberSet {
         }
     }
 
-    pub fn insert(&mut self, sequence: SequenceNumber) -> bool {
+    pub fn insert(&mut self, sequence: SequenceNumber) -> SequenceResult {
         match sequence_greater_than(sequence, self.latest) {
             true => {
                 let offset = sequence.wrapping_sub(self.latest);
@@ -209,14 +217,17 @@ impl SequenceNumberSet {
                 self.bitfield |= 0b1;
                 self.bitfield <<= offset - 1;
                 self.latest = sequence;
-                true
+                SequenceResult::Latest
             }
             false => match self.index(sequence) {
-                None => false,
+                None => SequenceResult::TooOld,
                 Some(index) => {
                     let old = self.bitfield;
                     self.bitfield |= 0b1 << index;
-                    self.bitfield != old
+                    match self.bitfield != old {
+                        true => SequenceResult::Fresh,
+                        false => SequenceResult::Duplicate
+                    }
                 }
             }
         }

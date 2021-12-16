@@ -4,7 +4,7 @@ use std::io::Result;
 use std::time::Instant;
 use crate::MAX_PACKET_SIZE;
 use crate::packets::Packet;
-use crate::sequencing::{SequenceBuffer, SequenceNumber, SequenceNumberSet};
+use crate::sequencing::{SequenceBuffer, SequenceNumber, SequenceNumberSet, SequenceResult};
 use crate::socket::Transport;
 
 #[derive(Debug)]
@@ -96,8 +96,13 @@ impl VirtualConnection {
         self.last_received_packet = Instant::now();
     }
 
-    pub fn handle_seq(&mut self, seq: SequenceNumber) -> bool {
-        self.received_packets.insert(seq)
+    pub fn handle_seq(&mut self, seq: SequenceNumber) -> Option<bool> {
+        match self.received_packets.insert(seq) {
+            SequenceResult::Latest => Some(true),
+            SequenceResult::Fresh => Some(false),
+            SequenceResult::Duplicate => None,
+            SequenceResult::TooOld => None
+        }
     }
 
     pub fn handle_ack<F>(&mut self, ack: SequenceNumberSet, mut callback: F) where F: FnMut(SequenceNumber) {
