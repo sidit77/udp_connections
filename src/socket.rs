@@ -1,16 +1,15 @@
+use std::fmt::Debug;
 use std::io::Result;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
-use crate::client::Client;
-use crate::server::Server;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 
-pub trait UdpSocketImpl {
-    fn send_to<A: ToSocketAddrs>(&self, buf: &[u8], addr: A) -> Result<usize>;
+pub trait Transport : Debug {
+    fn send_to(&self, buf: &[u8], addr: SocketAddr) -> Result<usize>;
     fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)>;
     fn local_addr(&self) -> Result<SocketAddr>;
 }
 
-impl UdpSocketImpl for UdpSocket {
-    fn send_to<A: ToSocketAddrs>(&self, buf: &[u8], addr: A) -> Result<usize> {
+impl Transport for UdpSocket {
+    fn send_to(&self, buf: &[u8], addr: SocketAddr) -> Result<usize> {
         self.send_to(buf, addr)
     }
 
@@ -23,25 +22,26 @@ impl UdpSocketImpl for UdpSocket {
     }
 }
 
-pub type UdpClient = Client<UdpSocket>;
-impl UdpClient {
-    pub fn new(identifier: &str) -> Result<Self> {
-        let loopback = Ipv4Addr::new(127, 0, 0, 1);
-        let address = SocketAddrV4::new(loopback, 0);
-        let socket = UdpSocket::bind(address)?;
-        socket.set_nonblocking(true)?;
+const ANY_PORT: u16 = 0;
 
-        Ok(Self::from_socket(socket, identifier))
+pub struct Endpoint;
+
+impl Endpoint {
+
+    pub fn remote_port(port: u16) -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port)
     }
-}
 
-pub type UdpServer = Server<UdpSocket>;
-impl UdpServer {
-    pub fn listen<A: ToSocketAddrs>(address: A, identifier: &str, max_clients: u16) -> Result<Self> {
-        let socket = UdpSocket::bind(address)?;
-        socket.set_nonblocking(true)?;
-        Ok(Self::from_socket(socket, identifier, max_clients))
+    pub fn remote_any() -> SocketAddr {
+        Self::remote_port(ANY_PORT)
     }
+
+    pub fn local_port(port: u16) -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
+    }
+
+    pub fn local_any() -> SocketAddr {
+        Self::local_port(ANY_PORT)
+    }
+
 }
-
-

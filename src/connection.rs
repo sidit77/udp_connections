@@ -1,23 +1,24 @@
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::fmt::Debug;
+use std::net::SocketAddr;
 use std::io::Result;
 use std::time::Instant;
 use crate::MAX_PACKET_SIZE;
 use crate::packets::Packet;
 use crate::sequencing::{SequenceBuffer, SequenceNumber, SequenceNumberSet};
-use crate::socket::UdpSocketImpl;
+use crate::socket::Transport;
 
 #[derive(Debug)]
-pub struct PacketSocket<U: UdpSocketImpl> {
-    socket: U,
+pub struct PacketSocket {
+    socket: Box<dyn Transport>,
     buffer: [u8; MAX_PACKET_SIZE],
     salt: String
 }
 
-impl<U> PacketSocket<U> where U: UdpSocketImpl {
+impl PacketSocket {
 
-    pub fn new(socket: U, identifier: &str) -> Self {
+    pub fn new<T: Transport + 'static>(socket: T, identifier: &str) -> Self {
         Self {
-            socket,
+            socket: Box::new(socket),
             buffer: [0; MAX_PACKET_SIZE],
             salt: identifier.to_string()
         }
@@ -32,7 +33,7 @@ impl<U> PacketSocket<U> where U: UdpSocketImpl {
         Ok((Packet::from(&self.buffer[..size], self.salt.as_bytes()), src))
     }
 
-    pub fn send_to<A: ToSocketAddrs>(&mut self, packet: Packet, addrs: A) -> Result<()> {
+    pub fn send_to(&mut self, packet: Packet, addrs: SocketAddr) -> Result<()> {
         let packet = packet.write(&mut self.buffer, self.salt.as_bytes())?;
         let i = self.socket.send_to(packet, addrs)?;
         assert_eq!(packet.len(), i);

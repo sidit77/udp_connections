@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use std::net::UdpSocket;
 use std::time::Duration;
 use byteorder::{BigEndian, ReadBytesExt};
-use udp_connections::{ClientEvent, ConditionedUdpClient, ConditionedUdpServer, MAX_PACKET_SIZE, MessageChannel, NetworkOptions, ServerEvent};
+use udp_connections::{Client, ClientEvent, Endpoint, MAX_PACKET_SIZE, MessageChannel, NetworkOptions, Server, ServerEvent, TransportExtension};
 
 const SERVER: &str = "127.0.0.1:23452";
 const IDENTIFIER: &str = "udp_connections_demo";
@@ -11,7 +12,9 @@ const NETWORK_CONFIG: NetworkOptions = NetworkOptions {
 
 fn client() {
     std::thread::sleep(Duration::from_secs_f32(0.5));
-    let mut socket = ConditionedUdpClient::new(IDENTIFIER, NETWORK_CONFIG).unwrap();
+    let socket = UdpSocket::bind(Endpoint::local_any()).unwrap();
+    socket.set_nonblocking(true).unwrap();
+    let mut socket = Client::new(socket.with_options(NETWORK_CONFIG), IDENTIFIER);
     let prefix = format!("[Client {}]", socket.local_addr().unwrap());
     println!("{} starting up", prefix);
     socket.connect(SERVER).unwrap();
@@ -83,8 +86,9 @@ fn main(){
     let c1 = std::thread::spawn(self::client);
     //let _ = std::thread::spawn(self::client);
 
-    let mut socket = ConditionedUdpServer::listen(
-        SERVER, IDENTIFIER, 1, NETWORK_CONFIG).unwrap();
+    let socket = UdpSocket::bind(SERVER).unwrap();
+    socket.set_nonblocking(true).unwrap();
+    let mut socket = Server::new(socket.with_options(NETWORK_CONFIG), IDENTIFIER, 1);
     let prefix = format!("[Server {}]", socket.local_addr().unwrap());
 
     let mut message_channels = HashMap::new();

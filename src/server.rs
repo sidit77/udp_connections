@@ -6,7 +6,7 @@ use crate::connection::{PacketSocket, VirtualConnection};
 use crate::constants::{CONNECTION_TIMEOUT, KEEPALIVE_INTERVAL};
 use crate::packets::Packet;
 use crate::sequencing::SequenceNumber;
-use crate::socket::UdpSocketImpl;
+use crate::socket::Transport;
 
 #[derive(Debug, Copy, Clone)]
 pub enum ServerDisconnectReason {
@@ -102,16 +102,16 @@ impl ConnectionManager {
 
 
 #[derive(Debug)]
-pub struct Server<U: UdpSocketImpl> {
-    socket: PacketSocket<U>,
+pub struct Server {
+    socket: PacketSocket,
     clients: ConnectionManager,
     ack_queue: VecDeque<(u16, SequenceNumber)>
 }
 
 
-impl<U: UdpSocketImpl> Server<U> {
+impl Server {
 
-    pub fn from_socket(socket: U, identifier: &str, max_clients: u16) -> Self {
+    pub fn new<T: Transport + 'static>(socket: T, identifier: &str, max_clients: u16) -> Self {
         let socket = PacketSocket::new(socket, identifier);
         let clients = ConnectionManager::new(max_clients);
         Self {
