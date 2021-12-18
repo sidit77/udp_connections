@@ -17,13 +17,13 @@ fn client() {
     let mut socket = Client::new(socket.with_options(NETWORK_CONFIG), IDENTIFIER);
     let prefix = format!("[Client {}]", socket.local_addr().unwrap());
     println!("{} starting up", prefix);
-    socket.connect(SERVER).unwrap();
+    socket.connect(SERVER.parse().unwrap());
 
     let mut msg_channel = None;
     let mut buffer = [0u8; MAX_PACKET_SIZE];
     let mut i = 0u32;
     'outer: loop {
-        socket.update().unwrap();
+        socket.update();
         while let Some(event) = socket.next_event(&mut buffer).unwrap() {
             match event {
                 ClientEvent::Connected(id) => {

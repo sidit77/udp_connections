@@ -6,6 +6,7 @@ mod server;
 mod connection;
 mod sequencing;
 mod reliable;
+mod error;
 
 pub use client::{Client, ClientEvent, ClientDisconnectReason};
 pub use server::{Server, ServerEvent, ServerDisconnectReason};

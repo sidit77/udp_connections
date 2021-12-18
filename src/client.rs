@@ -1,21 +1,23 @@
 use std::collections::VecDeque;
-use std::net::{SocketAddr, ToSocketAddrs};
-use std::io::{Error, ErrorKind, Result};
+use std::net::SocketAddr;
+use std::io::ErrorKind;
 use std::time::Instant;
 use crate::connection::{PacketSocket, VirtualConnection};
 use crate::constants::{CONNECTION_TIMEOUT, KEEPALIVE_INTERVAL};
+use crate::error::{ConnectionError, IOResult};
 use crate::packets::Packet;
 use crate::sequencing::SequenceNumber;
 use crate::socket::Transport;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub enum ClientDisconnectReason {
     Disconnected,
     TimedOut,
-    ConnectionDenied
+    ConnectionDenied,
+    SocketError(ErrorKind)
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub enum ClientEvent<'a> {
     Connected(u16),
     Disconnected(ClientDisconnectReason),
@@ -28,7 +30,25 @@ enum ClientState {
     Disconnected,
     Connecting(SocketAddr, Instant),
     Connected(VirtualConnection),
-    Disconnecting
+    Disconnecting(ClientDisconnectReason)
+}
+
+impl ClientState {
+    pub fn get_connection(&self) -> Result<&VirtualConnection, ConnectionError> {
+        match &self {
+            ClientState::Connected(connection) => Ok(connection),
+            ClientState::Disconnected => Err(ConnectionError::Disconnected),
+            _ => Err(ConnectionError::ConnectionNotReady)
+        }
+    }
+
+    fn get_connection_mut(&mut self) -> Result<&mut VirtualConnection, ConnectionError> {
+        match self {
+            ClientState::Connected(connection) => Ok(connection),
+            ClientState::Disconnected => Err(ConnectionError::Disconnected),
+            _ => Err(ConnectionError::ConnectionNotReady)
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -48,7 +68,7 @@ impl Client {
         }
     }
 
-    pub fn local_addr(&self) -> Result<SocketAddr> {
+    pub fn local_addr(&self) -> IOResult<SocketAddr> {
         self.socket.local_addr()
     }
 
@@ -57,7 +77,7 @@ impl Client {
             ClientState::Disconnected => None,
             ClientState::Connecting(addrs, _) => Some(*addrs),
             ClientState::Connected(vc) => Some(vc.addrs()),
-            ClientState::Disconnecting => None,
+            ClientState::Disconnecting(_) => None,
         }
     }
 
@@ -65,61 +85,57 @@ impl Client {
         matches!(self.state, ClientState::Connected{..})
     }
 
-    pub fn connect<A: ToSocketAddrs>(&mut self, address: A) -> Result<()> {
-        match address.to_socket_addrs()?.next() {
-            Some(addr) => {
-                self.state = ClientState::Connecting(addr, Instant::now());
-                Ok(())
-            },
-            None => Err(Error::new(ErrorKind::InvalidInput, "no addresses to connect to")),
-        }
+    pub fn connect(&mut self, addrs: SocketAddr) {
+        self.state = ClientState::Connecting(addrs, Instant::now());
     }
 
-    pub fn disconnect(&mut self) -> Result<()> {
-        match &mut self.state {
-            ClientState::Connected(vc) => {
-                for _ in 0..10 {
-                    self.socket.send_with (Packet::Disconnect, vc)?;
-                }
-                self.state = ClientState::Disconnecting;
-                Ok(())
-            },
-            _ => Err(Error::new(ErrorKind::NotConnected, "not connected to a server!"))
+    pub fn disconnect(&mut self) -> Result<(), ConnectionError> {
+        let connection = self.state.get_connection_mut()?;
+        for _ in 0..10 {
+            self.socket.send_with (Packet::Disconnect, connection)?;
         }
+        self.state = ClientState::Disconnecting(ClientDisconnectReason::Disconnected);
+        Ok(())
     }
 
-    pub fn update(&mut self) -> Result<()> {
-        let now = Instant::now();
+    pub fn connection(&self) -> Result<&VirtualConnection, ConnectionError> {
+        self.state.get_connection()
+    }
+
+    pub fn update(&mut self) {
         match self.state {
-            ClientState::Connecting(remote, _)
-            => self.socket.send_to(Packet::ConnectionRequest, remote),
-            ClientState::Connected(ref mut vc) if (now - vc.last_send_packet) > KEEPALIVE_INTERVAL
-            => self.socket.send_keepalive(vc),
-            _ => Ok(())
+            ClientState::Connecting(remote, start) => {
+                if start.elapsed() > CONNECTION_TIMEOUT {
+                    self.state = ClientState::Disconnecting(ClientDisconnectReason::TimedOut)
+                }
+                if let Err(e) = self.socket.send_to(Packet::ConnectionRequest, remote) {
+                    self.state = ClientState::Disconnecting(ClientDisconnectReason::SocketError(e.kind()));
+                }
+            }
+            ClientState::Connected(ref mut connection) => {
+                if connection.last_send_packet.elapsed() > KEEPALIVE_INTERVAL {
+                    if let Err(e) = self.socket.send_keepalive(connection) {
+                        self.state = ClientState::Disconnecting(ClientDisconnectReason::SocketError(e.kind()));
+                        return;
+                    }
+                }
+                if connection.last_received_packet.elapsed() > CONNECTION_TIMEOUT {
+                    self.state = ClientState::Disconnecting(ClientDisconnectReason::TimedOut);
+                }
+            }
+            _ => {}
         }
     }
 
-    pub fn next_event<'a>(&mut self, payload: &'a mut [u8]) -> Result<Option<ClientEvent<'a>>> {
-        let now = Instant::now();
-
+    pub fn next_event<'a>(&mut self, payload: &'a mut [u8]) -> IOResult<Option<ClientEvent<'a>>> {
         if let Some(seq) = self.ack_queue.pop_front() {
             return Ok(Some(ClientEvent::PacketAcknowledged(seq)))
         }
 
-        match &self.state {
-            ClientState::Connecting(_, start) => if (now - *start) > CONNECTION_TIMEOUT {
-                self.state = ClientState::Disconnected;
-                return Ok(Some(ClientEvent::Disconnected(ClientDisconnectReason::TimedOut)))
-            },
-            ClientState::Connected(vc) if (now - vc.last_received_packet) > CONNECTION_TIMEOUT => {
-                self.state = ClientState::Disconnected;
-                return Ok(Some(ClientEvent::Disconnected(ClientDisconnectReason::TimedOut)))
-            },
-            ClientState::Disconnecting => {
-                self.state = ClientState::Disconnected;
-                return Ok(Some(ClientEvent::Disconnected(ClientDisconnectReason::Disconnected)))
-            }
-            _ => {}
+        if let ClientState::Disconnecting(reason) = &self.state {
+            let reason = reason.clone();
+            self.state = ClientState::Disconnected;
+            return Ok(Some(ClientEvent::Disconnected(reason)));
         }
 
         match self.socket.recv_from() {
@@ -165,18 +181,13 @@ impl Client {
         }
     }
 
-    pub fn send(&mut self, payload: &[u8]) -> Result<SequenceNumber> {
-        match &mut self.state {
-            ClientState::Connected(vc) => self.socket.send_payload(payload, vc),
-            _ => Err(Error::new(ErrorKind::NotConnected, "not connected to a server"))
-        }
+    pub fn send(&mut self, payload: &[u8]) -> Result<SequenceNumber, ConnectionError> {
+        let connection = self.state.get_connection_mut()?;
+        Ok(self.socket.send_payload(payload, connection)?)
     }
 
-    pub fn next_sequence_number(&self) -> Result<SequenceNumber> {
-        match &self.state {
-            ClientState::Connected(vc) => Ok(vc.peek_next_sequence_number()),
-            _ => Err(Error::new(ErrorKind::NotConnected, "not connected to a server"))
-        }
+    pub fn next_sequence_number(&self) -> Result<SequenceNumber, ConnectionError> {
+        Ok(self.connection()?.peek_next_sequence_number())
     }
 
 }

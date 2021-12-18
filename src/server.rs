@@ -1,43 +1,14 @@
 use std::collections::VecDeque;
-use std::error::Error;
-use std::fmt::{Debug, Display, Formatter};
-use std::net::{SocketAddr};
+use std::fmt::Debug;
+use std::net::SocketAddr;
 use std::time::Instant;
 use std::io::ErrorKind;
 use crate::connection::{PacketSocket, VirtualConnection};
 use crate::constants::{CONNECTION_TIMEOUT, KEEPALIVE_INTERVAL};
+use crate::error::{ConnectionError, IOResult};
 use crate::packets::Packet;
 use crate::sequencing::SequenceNumber;
 use crate::socket::Transport;
-
-type IOResult<T> = std::io::Result<T>;
-type IOError = std::io::Error;
-
-#[derive(Debug)]
-pub enum ServerError {
-    ClientNotConnected,
-    ClientNotReady,
-    SocketError(IOError)
-}
-
-impl Display for ServerError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ServerError::ClientNotConnected => f.write_str("Client could not be found"),
-            ServerError::ClientNotReady => f.write_str("Client is not ready"),
-            ServerError::SocketError(err) => f.write_fmt(format_args!("Socket Error: {}", err))
-        }
-    }
-}
-
-impl Error for ServerError {}
-
-impl From<IOError> for ServerError {
-    fn from(err: IOError) -> Self {
-        ServerError::SocketError(err)
-    }
-}
-
 
 #[derive(Debug, Clone)]
 pub enum ServerDisconnectReason {
@@ -107,25 +78,25 @@ impl ConnectionManager {
         *self.get_mut(id).unwrap() = new_state;
     }
 
-    fn get_connection(&self, client_id: u16) -> Result<&VirtualConnection, ServerError> {
+    fn get_connection(&self, client_id: u16) -> Result<&VirtualConnection, ConnectionError> {
         match self.get(client_id) {
             Some(client) => match client {
                 ClientState::Connected(connection) => Ok(connection),
-                ClientState::Disconnected => Err(ServerError::ClientNotConnected),
-                _ => Err(ServerError::ClientNotReady)
+                ClientState::Disconnected => Err(ConnectionError::Disconnected),
+                _ => Err(ConnectionError::ConnectionNotReady)
             }
-            None => Err(ServerError::ClientNotConnected)
+            None => Err(ConnectionError::Disconnected)
         }
     }
 
-    fn get_connection_mut(&mut self, client_id: u16) -> Result<&mut VirtualConnection, ServerError> {
+    fn get_connection_mut(&mut self, client_id: u16) -> Result<&mut VirtualConnection, ConnectionError> {
         match self.get_mut(client_id) {
             Some(client) => match client {
                 ClientState::Connected(connection) => Ok(connection),
-                ClientState::Disconnected => Err(ServerError::ClientNotConnected),
-                _ => Err(ServerError::ClientNotReady)
+                ClientState::Disconnected => Err(ConnectionError::Disconnected),
+                _ => Err(ConnectionError::ConnectionNotReady)
             }
-            None => Err(ServerError::ClientNotConnected)
+            None => Err(ConnectionError::Disconnected)
         }
     }
 
@@ -274,15 +245,12 @@ impl Server {
         self.clients.connections().map(|v|v.id())
     }
 
-    pub fn send(&mut self, client_id: u16, payload: &[u8]) -> Result<SequenceNumber, ServerError> {
+    pub fn send(&mut self, client_id: u16, payload: &[u8]) -> Result<SequenceNumber, ConnectionError> {
         let connection = self.clients.get_connection_mut(client_id)?;
-        match self.socket.send_payload(payload, connection) {
-            Ok(seq) => Ok(seq),
-            Err(err) => Err(err.into())
-        }
+        Ok(self.socket.send_payload(payload, connection)?)
     }
 
-    pub fn disconnect(&mut self, client_id: u16) -> Result<(), ServerError> {
+    pub fn disconnect(&mut self, client_id: u16) -> Result<(), ConnectionError> {
         let connection = self.clients.get_connection_mut(client_id)?;
         for _ in 0..10 {
             self.socket.send_with(Packet::Disconnect, connection)?
@@ -292,11 +260,11 @@ impl Server {
         Ok(())
     }
 
-    pub fn next_sequence_number(&self, client_id: u16) -> Result<SequenceNumber, ServerError> {
+    pub fn next_sequence_number(&self, client_id: u16) -> Result<SequenceNumber, ConnectionError> {
         Ok(self.clients.get_connection(client_id)?.peek_next_sequence_number())
     }
 
-    pub fn connection(&self, client_id: u16) -> Result<&VirtualConnection, ServerError> {
+    pub fn connection(&self, client_id: u16) -> Result<&VirtualConnection, ConnectionError> {
         self.clients.get_connection(client_id)
     }
 
