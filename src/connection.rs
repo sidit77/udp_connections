@@ -80,7 +80,8 @@ pub struct VirtualConnection {
     pub last_send_packet: Instant,
     received_packets: SequenceNumberSet,
     sent_packets: SequenceBuffer<PacketInformation>,
-    rtt: u32
+    rtt: u32,
+    packet_loss: f32
 }
 
 impl VirtualConnection {
@@ -92,7 +93,8 @@ impl VirtualConnection {
             last_send_packet: Instant::now(),
             received_packets: SequenceNumberSet::new(0),
             sent_packets: SequenceBuffer::with_capacity(64),
-            rtt: 0
+            rtt: 0,
+            packet_loss: 0.0
         }
     }
 
@@ -102,6 +104,14 @@ impl VirtualConnection {
 
     pub fn addrs(&self) -> SocketAddr {
         self.addrs
+    }
+
+    pub fn rtt(&self) -> u32 {
+        self.rtt
+    }
+
+    pub fn packet_loss(&self) -> f32 {
+        self.packet_loss
     }
 
     pub fn on_receive(&mut self) {
@@ -124,6 +134,8 @@ impl VirtualConnection {
                 let rtt = info.send_time.elapsed().as_millis() as i64;
                 let diff = (rtt - self.rtt as i64) / 10;
                 self.rtt = (self.rtt as i64 + diff) as u32;
+
+                self.packet_loss = lerp(self.packet_loss, 0., 0.01);
             }
         }
     }
@@ -137,9 +149,13 @@ impl VirtualConnection {
         #[allow(unused_variables)]
         if let Some(info) = old {
             //packet lost
+            self.packet_loss = lerp(self.packet_loss, 1., 0.01);
         }
         seq
     }
 
 }
 
+fn lerp(a: f32, b: f32, v: f32) -> f32 {
+    a + (b - a) * v
+}

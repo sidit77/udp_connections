@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::net::UdpSocket;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use byteorder::{BigEndian, ReadBytesExt};
 use udp_connections::{Client, ClientEvent, Endpoint, MAX_PACKET_SIZE, MessageChannel, NetworkOptions, Server, ServerEvent, TransportExtension};
+use udp_connections::ClientDisconnectReason::Disconnected;
 
 const SERVER: &str = "127.0.0.1:23452";
 const IDENTIFIER: &str = "udp_connections_demo";
@@ -21,7 +22,8 @@ fn client() {
 
     let mut msg_channel = None;
     let mut buffer = [0u8; MAX_PACKET_SIZE];
-    let mut i = 0u32;
+    let mut i = 1u32;
+    let mut last_message = Instant::now();
     'outer: loop {
         socket.update();
         while let Some(event) = socket.next_event(&mut buffer).unwrap() {
@@ -42,10 +44,11 @@ fn client() {
                     while let Some(packet) = mc.receive_message() {
                         let mut packet= packet.as_ref();
                         let val = packet.read_u32::<BigEndian>().unwrap();
-                        println ! ("{} Packet {}", prefix, val);
-                        if val >= 20 {
-                            socket.disconnect().unwrap();
-                        }
+                        let connection = socket.connection().unwrap();
+                        println ! ("{} Packet {} ({} ms / {} pl)", prefix, val, connection.rtt(), connection.packet_loss());
+                        //if val >= 100 {
+                        //    socket.disconnect().unwrap();
+                        //}
                     }
 
                 },
@@ -64,16 +67,14 @@ fn client() {
 
 
         if socket.is_connected() {
-            if i % 5 == 0 {
-                //let seq = socket.send(&(i / 5 + 1).to_be_bytes()).unwrap();
-                //println!("Sent {}", seq);
-                msg_channel.as_mut().unwrap().queue_message(&(i / 5 + 1).to_be_bytes()).unwrap();
-
+            if last_message.elapsed() >= Duration::from_secs_f32(0.5) {
+                msg_channel.as_mut().unwrap().queue_message(&i.to_be_bytes()).unwrap();
+                last_message = Instant::now();
+                i += 1;
             }
-            i += 1;
         }
 
-        std::thread::sleep(Duration::from_secs_f32(0.05));
+        std::thread::sleep(Duration::from_millis(10));
     }
 
     assert!(msg_channel.is_none());
@@ -140,7 +141,7 @@ fn main(){
         //    socket.broadcast(&i.to_be_bytes()).unwrap();
         //}
         //i += 1;
-        std::thread::sleep(Duration::from_secs_f32(0.05));
+        std::thread::sleep(Duration::from_millis(10));
     }
 
     c1.join().unwrap();
