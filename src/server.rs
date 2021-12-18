@@ -1,21 +1,52 @@
 use std::collections::VecDeque;
-use std::io::{Error, ErrorKind, Result};
+use std::error::Error;
+use std::fmt::{Debug, Display, Formatter};
 use std::net::{SocketAddr};
 use std::time::Instant;
+use std::io::ErrorKind;
 use crate::connection::{PacketSocket, VirtualConnection};
 use crate::constants::{CONNECTION_TIMEOUT, KEEPALIVE_INTERVAL};
 use crate::packets::Packet;
 use crate::sequencing::SequenceNumber;
 use crate::socket::Transport;
 
-#[derive(Debug, Copy, Clone)]
+type IOResult<T> = std::io::Result<T>;
+type IOError = std::io::Error;
+
+#[derive(Debug)]
+pub enum ServerError {
+    ClientNotConnected,
+    ClientNotReady,
+    SocketError(IOError)
+}
+
+impl Display for ServerError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ServerError::ClientNotConnected => f.write_str("Client could not be found"),
+            ServerError::ClientNotReady => f.write_str("Client is not ready"),
+            ServerError::SocketError(err) => f.write_fmt(format_args!("Socket Error: {}", err))
+        }
+    }
+}
+
+impl Error for ServerError {}
+
+impl From<IOError> for ServerError {
+    fn from(err: IOError) -> Self {
+        ServerError::SocketError(err)
+    }
+}
+
+
+#[derive(Debug, Clone)]
 pub enum ServerDisconnectReason {
     Disconnected,
     TimedOut,
-    ConnectionDenied
+    SocketError(ErrorKind)
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 pub enum ServerEvent<'a> {
     ClientConnected(u16),
     ClientDisconnected(u16, ServerDisconnectReason),
@@ -27,7 +58,7 @@ pub enum ServerEvent<'a> {
 enum ClientState {
     Disconnected,
     Connected(VirtualConnection),
-    Disconnecting
+    Disconnecting(ServerDisconnectReason)
 }
 
 impl Default for ClientState {
@@ -64,12 +95,38 @@ impl ConnectionManager {
         }
     }
 
-    fn get(&self, id: u16) -> &ClientState {
-        &self.0[id as usize]
+    fn get(&self, id: u16) -> Option<&ClientState> {
+        self.0.get(id as usize)
     }
 
-    fn get_mut(&mut self, id: u16) -> &mut ClientState {
-        &mut self.0[id as usize]
+    fn get_mut(&mut self, id: u16) -> Option<&mut ClientState> {
+        self.0.get_mut(id as usize)
+    }
+
+    fn set(&mut self, id: u16, new_state: ClientState) {
+        *self.get_mut(id).unwrap() = new_state;
+    }
+
+    fn get_connection(&self, client_id: u16) -> Result<&VirtualConnection, ServerError> {
+        match self.get(client_id) {
+            Some(client) => match client {
+                ClientState::Connected(connection) => Ok(connection),
+                ClientState::Disconnected => Err(ServerError::ClientNotConnected),
+                _ => Err(ServerError::ClientNotReady)
+            }
+            None => Err(ServerError::ClientNotConnected)
+        }
+    }
+
+    fn get_connection_mut(&mut self, client_id: u16) -> Result<&mut VirtualConnection, ServerError> {
+        match self.get_mut(client_id) {
+            Some(client) => match client {
+                ClientState::Connected(connection) => Ok(connection),
+                ClientState::Disconnected => Err(ServerError::ClientNotConnected),
+                _ => Err(ServerError::ClientNotReady)
+            }
+            None => Err(ServerError::ClientNotConnected)
+        }
     }
 
     fn find_by_addrs(&mut self, addrs: SocketAddr) -> Option<&mut VirtualConnection> {
@@ -121,37 +178,37 @@ impl Server {
         }
     }
 
-    pub fn local_addr(&self) -> Result<SocketAddr> {
+    pub fn local_addr(&self) -> IOResult<SocketAddr> {
         self.socket.local_addr()
     }
 
-    pub fn update(&mut self) -> Result<()> {
+    pub fn update(&mut self) {
         let now = Instant::now();
-        for conn in self.clients.connections_mut() {
-            if (now - conn.last_send_packet) > KEEPALIVE_INTERVAL {
-                self.socket.send_keepalive(conn)?
+        for (_, client) in self.clients.slots_mut() {
+            if let Some(connection) = client.get_connection_mut() {
+                if (now - connection.last_send_packet) > KEEPALIVE_INTERVAL {
+                    if let Err(e) = self.socket.send_keepalive(connection) {
+                        *client = ClientState::Disconnecting(ServerDisconnectReason::SocketError(e.kind()));
+                        continue;
+                    }
+                }
+                if (now - connection.last_received_packet) > CONNECTION_TIMEOUT {
+                    *client = ClientState::Disconnecting(ServerDisconnectReason::TimedOut);
+                }
             }
         }
-        Ok(())
     }
 
-    pub fn next_event<'a>(&mut self, payload: &'a mut [u8]) -> Result<Option<ServerEvent<'a>>> {
-        let now = Instant::now();
-
+    pub fn next_event<'a>(&mut self, payload: &'a mut [u8]) -> IOResult<Option<ServerEvent<'a>>> {
         if let Some((client, seq)) = self.ack_queue.pop_front() {
             return Ok(Some(ServerEvent::PacketAcknowledged(client, seq)))
         }
 
-        {
-            let disconnect_client = self.clients.slots_mut().filter_map(|(id, state)|match state {
-                ClientState::Disconnecting => Some((id, ServerDisconnectReason::Disconnected)),
-                ClientState::Connected(v) if (now - v.last_received_packet) > CONNECTION_TIMEOUT
-                                              => Some((v.id(), ServerDisconnectReason::TimedOut)),
-                _ => None
-            }).next();
-            if let Some((id, reason)) = disconnect_client{
-                *self.clients.get_mut(id) = ClientState::Disconnected;
-                return Ok(Some(ServerEvent::ClientDisconnected(id, reason)))
+        for (id, client) in self.clients.slots_mut() {
+            if let ClientState::Disconnecting(reason) = client {
+                let reason = reason.clone();
+                *client = ClientState::Disconnected;
+                return Ok(Some(ServerEvent::ClientDisconnected(id, reason)));
             }
         }
 
@@ -201,7 +258,7 @@ impl Server {
                 Ok(Packet::Disconnect) => match self.clients.find_by_addrs(src) {
                     Some(conn) => {
                         let id = conn.id();
-                        *self.clients.get_mut(id) = ClientState::Disconnected;
+                        self.clients.set(id, ClientState::Disconnected);
                         Ok(Some(ServerEvent::ClientDisconnected(id, ServerDisconnectReason::Disconnected)))
                     },
                     None => self.next_event(payload)
@@ -217,51 +274,30 @@ impl Server {
         self.clients.connections().map(|v|v.id())
     }
 
-    pub fn broadcast(&mut self, payload: &[u8]) -> Result<()> {
-        for conn in self.clients.connections_mut() {
-            self.socket.send_payload(payload, conn)?;
+    pub fn send(&mut self, client_id: u16, payload: &[u8]) -> Result<SequenceNumber, ServerError> {
+        let connection = self.clients.get_connection_mut(client_id)?;
+        match self.socket.send_payload(payload, connection) {
+            Ok(seq) => Ok(seq),
+            Err(err) => Err(err.into())
         }
+    }
+
+    pub fn disconnect(&mut self, client_id: u16) -> Result<(), ServerError> {
+        let connection = self.clients.get_connection_mut(client_id)?;
+        for _ in 0..10 {
+            self.socket.send_with(Packet::Disconnect, connection)?
+        }
+        let id = connection.id();
+        self.clients.set(id, ClientState::Disconnecting(ServerDisconnectReason::Disconnected));
         Ok(())
     }
 
-    pub fn send(&mut self, client_id: u16, payload: &[u8]) -> Result<SequenceNumber> {
-        match self.clients.get_mut(client_id) {
-            ClientState::Connected(conn) => self.socket.send_payload(payload, conn),
-            _ => Err(Error::new(ErrorKind::NotConnected, "client not connected"))
-        }
+    pub fn next_sequence_number(&self, client_id: u16) -> Result<SequenceNumber, ServerError> {
+        Ok(self.clients.get_connection(client_id)?.peek_next_sequence_number())
     }
 
-    pub fn disconnect(&mut self, client_id: u16) -> Result<()> {
-        let state = self.clients.get_mut(client_id);
-        match state {
-            ClientState::Connected(conn) => {
-                for _ in 0..10 {
-                    self.socket.send_with(Packet::Disconnect, conn)?
-                }
-                *state = ClientState::Disconnecting;
-                Ok(())
-            },
-            _ => Err(Error::new(ErrorKind::NotConnected, "client not connected"))
-        }
-    }
-
-    pub fn disconnect_all(&mut self) -> Result<()> {
-        for (_, state) in self.clients.slots_mut() {
-            if let ClientState::Connected(conn) = state {
-                for _ in 0..10 {
-                    self.socket.send_with(Packet::Disconnect, conn)?;
-                }
-                *state = ClientState::Disconnecting;
-            }
-        }
-        Ok(())
-    }
-
-    pub fn next_sequence_number(&self, client_id: u16) -> Result<SequenceNumber> {
-        match self.clients.get(client_id) {
-            ClientState::Connected(conn) => Ok(conn.peek_next_sequence_number()),
-            _ => Err(Error::new(ErrorKind::NotConnected, "client not connected"))
-        }
+    pub fn connection(&self, client_id: u16) -> Result<&VirtualConnection, ServerError> {
+        self.clients.get_connection(client_id)
     }
 
 }

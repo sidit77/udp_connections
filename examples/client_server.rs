@@ -95,7 +95,7 @@ fn main(){
     //let mut i = 0u32;
     let mut buffer = [0u8; MAX_PACKET_SIZE];
     'outer: loop  {
-        socket.update().unwrap();
+        socket.update();
         while let Some(event) = socket.next_event(&mut buffer).unwrap() {
             match event {
                 ServerEvent::ClientConnected(client_id) => {
