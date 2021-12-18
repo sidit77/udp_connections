@@ -59,8 +59,18 @@ impl PacketSocket {
 
 }
 
-#[derive(Clone, Default)]
-struct PacketInformation;
+#[derive(Clone)]
+struct PacketInformation{
+    send_time: Instant
+}
+
+impl PacketInformation {
+    fn new() -> Self {
+        Self {
+            send_time: Instant::now()
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct VirtualConnection {
@@ -69,7 +79,8 @@ pub struct VirtualConnection {
     pub last_received_packet: Instant,
     pub last_send_packet: Instant,
     received_packets: SequenceNumberSet,
-    sent_packets: SequenceBuffer<PacketInformation>
+    sent_packets: SequenceBuffer<PacketInformation>,
+    rtt: u32
 }
 
 impl VirtualConnection {
@@ -80,7 +91,8 @@ impl VirtualConnection {
             last_received_packet: Instant::now(),
             last_send_packet: Instant::now(),
             received_packets: SequenceNumberSet::new(0),
-            sent_packets: SequenceBuffer::with_capacity(64)
+            sent_packets: SequenceBuffer::with_capacity(64),
+            rtt: 0
         }
     }
 
@@ -107,8 +119,11 @@ impl VirtualConnection {
 
     pub fn handle_ack<F>(&mut self, ack: SequenceNumberSet, mut callback: F) where F: FnMut(SequenceNumber) {
         for seq in ack.iter() {
-            if let Some(_) = self.sent_packets.remove(seq) {
+            if let Some(info) = self.sent_packets.remove(seq) {
                 callback(seq);
+                let rtt = info.send_time.elapsed().as_millis() as i64;
+                let diff = (rtt - self.rtt as i64) / 10;
+                self.rtt = (self.rtt as i64 + diff) as u32;
             }
         }
     }
@@ -118,7 +133,7 @@ impl VirtualConnection {
     }
 
     pub fn next_sequence_number(&mut self) -> SequenceNumber {
-        let (seq, old) = self.sent_packets.insert(PacketInformation);
+        let (seq, old) = self.sent_packets.insert(PacketInformation::new());
         #[allow(unused_variables)]
         if let Some(info) = old {
             //packet lost
