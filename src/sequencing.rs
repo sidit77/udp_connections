@@ -3,7 +3,7 @@ use std::fmt::{Debug, Formatter};
 pub type SequenceNumber = u16;
 
 #[derive(Clone)]
-pub struct SequenceBuffer<T> {
+pub struct SequenceBuffer<T: Clone> {
     newest_sequence_number: SequenceNumber,
     len: usize,
     entries: Box<[Option<T>]>
@@ -87,6 +87,13 @@ impl<T: Clone> SequenceBuffer<T> {
         }
     }
 
+    pub fn drain_older(&mut self, target: SequenceNumber) -> SequenceBufferDrain<T> {
+        SequenceBufferDrain {
+            inner: self,
+            target
+        }
+    }
+    
     pub fn next_sequence_number(&self) -> SequenceNumber {
         self.newest_sequence_number.wrapping_add(1)
     }
@@ -97,7 +104,26 @@ impl<T: Clone> SequenceBuffer<T> {
 
 }
 
-pub struct SequenceBufferIter<'a, T> {
+pub struct SequenceBufferDrain<'a, T: Clone> {
+    inner: &'a mut SequenceBuffer<T>,
+    target: SequenceNumber
+}
+
+impl <'a, T: Clone> Iterator for SequenceBufferDrain<'a, T> {
+    type Item = (SequenceNumber, T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let oldest = self.inner.oldest_sequence_number();
+        if sequence_less_than(oldest, self.target) {
+            let index = self.inner.index(oldest);
+            Some((oldest, self.inner.remove_at(index).unwrap()))
+        } else {
+            None
+        }
+    }
+}
+
+pub struct SequenceBufferIter<'a, T: Clone> {
     inner: &'a SequenceBuffer<T>,
     index: usize
 }
@@ -121,7 +147,7 @@ impl<'a, T: Clone> Iterator for SequenceBufferIter<'a, T> {
     }
 }
 
-pub struct SequenceBufferIterMut<'a, T: 'a> {
+pub struct SequenceBufferIterMut<'a, T: 'a + Clone> {
     inner: &'a mut SequenceBuffer<T>,
     index: usize
 }
@@ -308,12 +334,13 @@ mod tests {
             buffer.insert(5);
             buffer.insert(6);
 
-            let mut iter = buffer.iter().map(|(i,_)|i);
+            let mut iter = buffer.iter_mut().map(|(i,_)|i);
             assert_eq!(iter.next(), Some(3));
             assert_eq!(iter.next(), Some(4));
             assert_eq!(iter.next(), Some(5));
             assert_eq!(iter.next(), Some(6));
             assert_eq!(iter.next(), None);
+
         }
 
         #[test]
@@ -341,10 +368,33 @@ mod tests {
             assert_eq!(iter.next(), None);
         }
 
+        #[test]
+        fn test_drain() {
+            let mut buffer = SequenceBuffer::with_capacity(12);
+
+            buffer.insert(1);
+            buffer.insert(2);
+            buffer.insert(3);
+            let (seq, _) = buffer.insert(4);
+            buffer.insert(5);
+            buffer.insert(6);
+
+            let mut drain = buffer.drain_older(seq).map(|(i,_)|i);
+            assert_eq!(drain.next(), Some(1));
+            assert_eq!(drain.next(), Some(2));
+            assert_eq!(drain.next(), Some(3));
+            assert_eq!(drain.next(), None);
+
+            let mut iter = buffer.iter().map(|(i,_)|i);
+            assert_eq!(iter.next(), Some(4));
+            assert_eq!(iter.next(), Some(5));
+            assert_eq!(iter.next(), Some(6));
+            assert_eq!(iter.next(), None);
+        }
     }
 
     mod sequence_set {
-        use crate::sequencing::{SequenceNumber, SequenceNumberSet};
+        use crate::sequencing::{SequenceNumber, SequenceNumberSet, SequenceResult};
 
         #[test]
         fn test_contains() {
@@ -366,20 +416,20 @@ mod tests {
             assert_eq!(set.latest(), 0);
             assert_eq!(set.bitfield(), 0b0);
 
-            assert!(set.insert(5));
+            assert_eq!(set.insert(5), SequenceResult::Latest);
             assert_eq!(set.latest(), 5);
             assert_eq!(set.bitfield(), 0b10000);
 
-            assert!(set.insert(7));
+            assert_eq!(set.insert(7), SequenceResult::Latest);
             assert_eq!(set.latest(), 7);
             assert_eq!(set.bitfield(), 0b1000010);
 
-            assert!(set.insert(3));
+            assert_eq!(set.insert(3), SequenceResult::Fresh);
             assert_eq!(set.latest(), 7);
             assert_eq!(set.bitfield(), 0b1001010);
 
-            assert!(!set.insert(3));
-            assert!(!set.insert(SequenceNumber::MAX - 40));
+            assert_eq!(set.insert(3), SequenceResult::Duplicate);
+            assert_eq!(set.insert(SequenceNumber::MAX - 40), SequenceResult::TooOld);
         }
 
         #[test]

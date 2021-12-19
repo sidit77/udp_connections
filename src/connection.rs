@@ -2,6 +2,7 @@ use std::fmt::Debug;
 use std::net::SocketAddr;
 use std::io::Result;
 use std::time::Instant;
+use crate::constants::{PACKET_LOST_CUTOFF, PL_SMOOTHING_FACTOR, RTT_SMOOTHING_FACTOR};
 use crate::MAX_PACKET_SIZE;
 use crate::packets::Packet;
 use crate::sequencing::{SequenceBuffer, SequenceNumber, SequenceNumberSet, SequenceResult};
@@ -59,7 +60,7 @@ impl PacketSocket {
 
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct PacketInformation{
     send_time: Instant
 }
@@ -80,7 +81,7 @@ pub struct VirtualConnection {
     pub last_send_packet: Instant,
     received_packets: SequenceNumberSet,
     sent_packets: SequenceBuffer<PacketInformation>,
-    rtt: u32,
+    rtt: f32,
     packet_loss: f32
 }
 
@@ -92,8 +93,8 @@ impl VirtualConnection {
             last_received_packet: Instant::now(),
             last_send_packet: Instant::now(),
             received_packets: SequenceNumberSet::new(0),
-            sent_packets: SequenceBuffer::with_capacity(64),
-            rtt: 0,
+            sent_packets: SequenceBuffer::with_capacity(1024),
+            rtt: 0.0,
             packet_loss: 0.0
         }
     }
@@ -107,11 +108,11 @@ impl VirtualConnection {
     }
 
     pub fn rtt(&self) -> u32 {
-        self.rtt
+        f32::round(self.rtt * 1000.0) as u32
     }
 
     pub fn packet_loss(&self) -> f32 {
-        self.packet_loss
+        (self.packet_loss * 1000.0).round() / 1000.0
     }
 
     pub fn on_receive(&mut self) {
@@ -128,14 +129,17 @@ impl VirtualConnection {
     }
 
     pub fn handle_ack<F>(&mut self, ack: SequenceNumberSet, mut callback: F) where F: FnMut(SequenceNumber) {
+
+        for (_seq, _) in self.sent_packets.drain_older(ack.latest().wrapping_sub(PACKET_LOST_CUTOFF)) {
+            self.packet_loss = lerp(self.packet_loss, 1., PL_SMOOTHING_FACTOR);
+        }
         for seq in ack.iter() {
             if let Some(info) = self.sent_packets.remove(seq) {
                 callback(seq);
-                let rtt = info.send_time.elapsed().as_millis() as i64;
-                let diff = (rtt - self.rtt as i64) / 10;
-                self.rtt = (self.rtt as i64 + diff) as u32;
+                let rtt = info.send_time.elapsed().as_secs_f32();
+                self.rtt = lerp(self.rtt, rtt, RTT_SMOOTHING_FACTOR);
 
-                self.packet_loss = lerp(self.packet_loss, 0., 0.01);
+                self.packet_loss = lerp(self.packet_loss, 0., PL_SMOOTHING_FACTOR);
             }
         }
     }
@@ -145,12 +149,7 @@ impl VirtualConnection {
     }
 
     pub fn next_sequence_number(&mut self) -> SequenceNumber {
-        let (seq, old) = self.sent_packets.insert(PacketInformation::new());
-        #[allow(unused_variables)]
-        if let Some(info) = old {
-            //packet lost
-            self.packet_loss = lerp(self.packet_loss, 1., 0.01);
-        }
+        let (seq, _) = self.sent_packets.insert(PacketInformation::new());
         seq
     }
 

@@ -3,7 +3,6 @@ use std::net::UdpSocket;
 use std::time::{Duration, Instant};
 use byteorder::{BigEndian, ReadBytesExt};
 use udp_connections::{Client, ClientEvent, Endpoint, MAX_PACKET_SIZE, MessageChannel, NetworkOptions, Server, ServerEvent, TransportExtension};
-use udp_connections::ClientDisconnectReason::Disconnected;
 
 const SERVER: &str = "127.0.0.1:23452";
 const IDENTIFIER: &str = "udp_connections_demo";
@@ -45,7 +44,7 @@ fn client() {
                         let mut packet= packet.as_ref();
                         let val = packet.read_u32::<BigEndian>().unwrap();
                         let connection = socket.connection().unwrap();
-                        println ! ("{} Packet {} ({} ms / {} pl)", prefix, val, connection.rtt(), connection.packet_loss());
+                        println ! ("{} Packet {} ({} ms / {:.2} pl)", prefix, val, connection.rtt(), connection.packet_loss());
                         //if val >= 100 {
                         //    socket.disconnect().unwrap();
                         //}
@@ -78,7 +77,7 @@ fn client() {
     }
 
     assert!(msg_channel.is_none());
-    std::thread::sleep(Duration::from_millis(100));
+    std::thread::sleep(Duration::from_secs_f32(0.5));
 
     println!("{} shutting down", prefix);
 }
