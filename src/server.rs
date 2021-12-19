@@ -1,7 +1,6 @@
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::net::SocketAddr;
-use std::time::Instant;
 use std::io::ErrorKind;
 use crate::connection::{PacketSocket, VirtualConnection};
 use crate::constants::{CONNECTION_TIMEOUT, KEEPALIVE_INTERVAL};
@@ -154,16 +153,15 @@ impl Server {
     }
 
     pub fn update(&mut self) {
-        let now = Instant::now();
         for (_, client) in self.clients.slots_mut() {
             if let Some(connection) = client.get_connection_mut() {
-                if (now - connection.last_send_packet) > KEEPALIVE_INTERVAL {
+                if connection.last_packet_send() > KEEPALIVE_INTERVAL {
                     if let Err(e) = self.socket.send_keepalive(connection) {
                         *client = ClientState::Disconnecting(ServerDisconnectReason::SocketError(e.kind()));
                         continue;
                     }
                 }
-                if (now - connection.last_received_packet) > CONNECTION_TIMEOUT {
+                if connection.last_packet_received() > CONNECTION_TIMEOUT {
                     *client = ClientState::Disconnecting(ServerDisconnectReason::TimedOut);
                 }
             }

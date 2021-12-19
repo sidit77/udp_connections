@@ -113,13 +113,13 @@ impl Client {
                 }
             }
             ClientState::Connected(ref mut connection) => {
-                if connection.last_send_packet.elapsed() > KEEPALIVE_INTERVAL {
+                if connection.last_packet_send() > KEEPALIVE_INTERVAL {
                     if let Err(e) = self.socket.send_keepalive(connection) {
                         self.state = ClientState::Disconnecting(ClientDisconnectReason::SocketError(e.kind()));
                         return;
                     }
                 }
-                if connection.last_received_packet.elapsed() > CONNECTION_TIMEOUT {
+                if connection.last_packet_received() > CONNECTION_TIMEOUT {
                     self.state = ClientState::Disconnecting(ClientDisconnectReason::TimedOut);
                 }
             }

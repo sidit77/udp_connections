@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 use std::net::SocketAddr;
 use std::io::Result;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use crate::constants::{PACKET_LOST_CUTOFF, PL_SMOOTHING_FACTOR, RTT_SMOOTHING_FACTOR};
 use crate::MAX_PACKET_SIZE;
 use crate::packets::Packet;
@@ -42,7 +42,7 @@ impl PacketSocket {
     }
 
     pub fn send_with(&mut self, packet: Packet, connection: &mut VirtualConnection) -> Result<()> {
-        connection.last_send_packet = Instant::now();
+        connection.last_sent_packet = Instant::now();
         self.send_to(packet, connection.addrs)
     }
 
@@ -77,8 +77,8 @@ impl PacketInformation {
 pub struct VirtualConnection {
     addrs: SocketAddr,
     id: u16,
-    pub last_received_packet: Instant,
-    pub last_send_packet: Instant,
+    last_received_packet: Instant,
+    last_sent_packet: Instant,
     received_packets: SequenceNumberSet,
     sent_packets: SequenceBuffer<PacketInformation>,
     rtt: f32,
@@ -91,7 +91,7 @@ impl VirtualConnection {
             addrs,
             id,
             last_received_packet: Instant::now(),
-            last_send_packet: Instant::now(),
+            last_sent_packet: Instant::now(),
             received_packets: SequenceNumberSet::new(0),
             sent_packets: SequenceBuffer::with_capacity(1024),
             rtt: 0.0,
@@ -115,11 +115,19 @@ impl VirtualConnection {
         (self.packet_loss * 1000.0).round() / 1000.0
     }
 
-    pub fn on_receive(&mut self) {
+    pub fn last_packet_send(&self) -> Duration {
+        self.last_sent_packet.elapsed()
+    }
+
+    pub fn last_packet_received(&self) -> Duration {
+        self.last_sent_packet.elapsed()
+    }
+
+    pub(crate) fn on_receive(&mut self) {
         self.last_received_packet = Instant::now();
     }
 
-    pub fn handle_seq(&mut self, seq: SequenceNumber) -> Option<bool> {
+    pub(crate) fn handle_seq(&mut self, seq: SequenceNumber) -> Option<bool> {
         match self.received_packets.insert(seq) {
             SequenceResult::Latest => Some(true),
             SequenceResult::Fresh => Some(false),
@@ -128,7 +136,7 @@ impl VirtualConnection {
         }
     }
 
-    pub fn handle_ack<F>(&mut self, ack: SequenceNumberSet, mut callback: F) where F: FnMut(SequenceNumber) {
+    pub(crate) fn handle_ack<F>(&mut self, ack: SequenceNumberSet, mut callback: F) where F: FnMut(SequenceNumber) {
 
         for (_seq, _) in self.sent_packets.drain_older(ack.latest().wrapping_sub(PACKET_LOST_CUTOFF)) {
             self.packet_loss = lerp(self.packet_loss, 1., PL_SMOOTHING_FACTOR);
@@ -148,7 +156,7 @@ impl VirtualConnection {
         self.sent_packets.next_sequence_number()
     }
 
-    pub fn next_sequence_number(&mut self) -> SequenceNumber {
+    pub(crate) fn next_sequence_number(&mut self) -> SequenceNumber {
         let (seq, _) = self.sent_packets.insert(PacketInformation::new());
         seq
     }
