@@ -6,7 +6,7 @@ use crate::connection::{PacketSocket, VirtualConnection};
 use crate::constants::{CONNECTION_TIMEOUT, KEEPALIVE_INTERVAL};
 use crate::error::{ConnectionError, IOResult};
 use crate::packets::Packet;
-use crate::sequencing::SequenceNumber;
+use crate::sequencing::{SequenceNumber, SequenceResult};
 use crate::socket::Transport;
 
 #[derive(Debug, Clone)]
@@ -153,12 +153,13 @@ impl Client {
                 },
                 ClientState::Connected(ref mut vc) if vc.addrs() == src => match packet{
                     Ok(Packet::Payload(seq, ack, data)) => {
-                        if let Some(latest) = vc.handle_seq(seq) {
+                        let seq = vc.handle_seq(seq);
+                        if let SequenceResult::Latest | SequenceResult::Fresh = seq {
                             vc.on_receive();
                             vc.handle_ack(ack, |i|self.ack_queue.push_back(i));
                             let result = &mut payload[..data.len()];
                             result.copy_from_slice(data);
-                            Ok(Some(ClientEvent::PacketReceived(latest, result)))
+                            Ok(Some(ClientEvent::PacketReceived(seq == SequenceResult::Latest, result)))
                         } else {
                             self.next_event(payload)
                         }

@@ -127,17 +127,11 @@ impl VirtualConnection {
         self.last_received_packet = Instant::now();
     }
 
-    pub(crate) fn handle_seq(&mut self, seq: SequenceNumber) -> Option<bool> {
-        match self.received_packets.insert(seq) {
-            SequenceResult::Latest => Some(true),
-            SequenceResult::Fresh => Some(false),
-            SequenceResult::Duplicate => None,
-            SequenceResult::TooOld => None
-        }
+    pub(crate) fn handle_seq(&mut self, seq: SequenceNumber) -> SequenceResult {
+        self.received_packets.insert(seq)
     }
 
     pub(crate) fn handle_ack<F>(&mut self, ack: SequenceNumberSet, mut callback: F) where F: FnMut(SequenceNumber) {
-
         for (_seq, _) in self.sent_packets.drain_older(ack.latest().wrapping_sub(PACKET_LOST_CUTOFF)) {
             self.packet_loss = lerp(self.packet_loss, 1., PL_SMOOTHING_FACTOR);
         }

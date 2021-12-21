@@ -6,7 +6,7 @@ use crate::connection::{PacketSocket, VirtualConnection};
 use crate::constants::{CONNECTION_TIMEOUT, KEEPALIVE_INTERVAL};
 use crate::error::{ConnectionError, IOResult};
 use crate::packets::Packet;
-use crate::sequencing::SequenceNumber;
+use crate::sequencing::{SequenceNumber, SequenceResult};
 use crate::socket::Transport;
 
 #[derive(Debug, Clone)]
@@ -202,13 +202,14 @@ impl Server {
                 },
                 Ok(Packet::Payload(seq, ack, data)) => match self.clients.find_by_addrs(src) {
                     Some(conn) => {
-                        if let Some(latest) = conn.handle_seq(seq) {
+                        let seq = conn.handle_seq(seq);
+                        if let SequenceResult::Latest | SequenceResult::Fresh = seq {
                             let id = conn.id();
                             conn.handle_ack(ack, |i|self.ack_queue.push_back((id, i)));
                             conn.on_receive();
                             let result = &mut payload[..data.len()];
                             result.copy_from_slice(data);
-                            Ok(Some(ServerEvent::PacketReceived(id, latest, result)))
+                            Ok(Some(ServerEvent::PacketReceived(id, seq == SequenceResult::Latest, result)))
                         } else {
                             self.next_event(payload)
                         }
