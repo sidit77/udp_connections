@@ -251,10 +251,6 @@ impl Server {
         Ok(())
     }
 
-    pub fn next_sequence_number(&self, client_id: u16) -> Result<SequenceNumber, ConnectionError> {
-        Ok(self.clients.get_connection(client_id)?.peek_next_sequence_number())
-    }
-
     pub fn connection(&self, client_id: u16) -> Result<&VirtualConnection, ConnectionError> {
         self.clients.get_connection(client_id)
     }

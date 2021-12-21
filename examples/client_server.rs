@@ -61,7 +61,8 @@ fn client() {
 
         if let Some(mc) = msg_channel.as_mut(){
             if mc.has_unsend_messages() {
-                socket.send(mc.send_packets(socket.next_sequence_number().unwrap()).unwrap()).unwrap();
+                let seq = socket.connection().unwrap().peek_next_sequence_number();
+                socket.send(mc.send_packets(seq).unwrap()).unwrap();
             }
         }
 
@@ -132,9 +133,8 @@ fn main(){
 
         for (id, channel) in message_channels.iter_mut() {
             if channel.has_unsend_messages() {
-                socket.send(*id,
-                            channel.send_packets(
-                                socket.next_sequence_number(*id).unwrap()).unwrap()).unwrap();
+                let seq = socket.connection(*id).unwrap().peek_next_sequence_number();
+                socket.send(*id, channel.send_packets(seq).unwrap()).unwrap();
             }
         }
 

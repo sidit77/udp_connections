@@ -195,8 +195,4 @@ impl Client {
         Ok(self.socket.send_payload(payload, connection)?)
     }
 
-    pub fn next_sequence_number(&self) -> Result<SequenceNumber, ConnectionError> {
-        Ok(self.connection()?.peek_next_sequence_number())
-    }
-
 }
