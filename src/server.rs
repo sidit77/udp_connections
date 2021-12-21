@@ -185,62 +185,50 @@ impl Server {
             }
         }
 
-        match self.socket.recv_from() {
-            Ok((packet, src)) => match packet {
-                Ok(Packet::ConnectionRequest) => match self.clients.find_by_addrs(src){
-                    None => match self.clients.create_new_connection(src) {
-                        None => {
-                            self.socket.send_to(Packet::ConnectionDenied, src)?;
-                            self.next_event(payload)
+        loop {
+            match self.socket.recv_from() {
+                Ok((packet, src)) => match packet {
+                    Ok(Packet::ConnectionRequest) => match self.clients.find_by_addrs(src) {
+                        None => match self.clients.create_new_connection(src) {
+                            None => {
+                                self.socket.send_to(Packet::ConnectionDenied, src)?;
+                            },
+                            Some(conn) => {
+                                self.socket.send_with(Packet::ConnectionAccepted(conn.id()), conn)?;
+                                return Ok(Some(ServerEvent::ClientConnected(conn.id())))
+                            }
                         },
                         Some(conn) => {
+                            conn.on_receive();
                             self.socket.send_with(Packet::ConnectionAccepted(conn.id()), conn)?;
-                            Ok(Some(ServerEvent::ClientConnected(conn.id())))
                         }
                     },
-                    Some(conn) => {
-                        conn.on_receive();
-                        self.socket.send_with(Packet::ConnectionAccepted(conn.id()), conn)?;
-                        self.next_event(payload)
-                    }
-                },
-                Ok(Packet::Payload(seq, ack, data)) => match self.clients.find_by_addrs(src) {
-                    Some(conn) => {
+                    Ok(Packet::Payload(seq, ack, data)) => if let Some(conn) = self.clients.find_by_addrs(src) {
                         let seq = conn.handle_seq(seq);
                         if let SequenceResult::Latest | SequenceResult::Fresh = seq {
                             let id = conn.id();
-                            conn.handle_ack(ack, |i, acked|self.ack_queue.push_back((id, i, acked)));
+                            conn.handle_ack(ack, |i, acked| self.ack_queue.push_back((id, i, acked)));
                             conn.on_receive();
                             let result = &mut payload[..data.len()];
                             result.copy_from_slice(data);
-                            Ok(Some(ServerEvent::PacketReceived(id, seq == SequenceResult::Latest, result)))
-                        } else {
-                            self.next_event(payload)
+                            return Ok(Some(ServerEvent::PacketReceived(id, seq == SequenceResult::Latest, result)))
                         }
                     },
-                    None => self.next_event(payload)
-                },
-                Ok(Packet::KeepAlive(ack)) => match self.clients.find_by_addrs(src) {
-                    Some(conn) => {
+                    Ok(Packet::KeepAlive(ack)) => if let Some(conn) = self.clients.find_by_addrs(src) {
                         let id = conn.id();
                         conn.on_receive();
-                        conn.handle_ack(ack, |i, acked|self.ack_queue.push_back((id, i, acked)));
-                        self.next_event(payload)
+                        conn.handle_ack(ack, |i, acked| self.ack_queue.push_back((id, i, acked)));
                     },
-                    None => self.next_event(payload)
-                },
-                Ok(Packet::Disconnect) => match self.clients.find_by_addrs(src) {
-                    Some(conn) => {
+                    Ok(Packet::Disconnect) => if let Some(conn) = self.clients.find_by_addrs(src) {
                         let id = conn.id();
                         self.clients.set(id, ClientState::Disconnected);
-                        Ok(Some(ServerEvent::ClientDisconnected(id, ServerDisconnectReason::Disconnected)))
+                        return Ok(Some(ServerEvent::ClientDisconnected(id, ServerDisconnectReason::Disconnected)))
                     },
-                    None => self.next_event(payload)
+                    _ => continue
                 },
-                _ => self.next_event(payload)
-            },
-            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock) => Ok(None),
-            Err(e) => Err(e)
+                Err(e) if matches!(e.kind(), ErrorKind::WouldBlock) => return Ok(None),
+                Err(e) => return Err(e)
+            }
         }
     }
 

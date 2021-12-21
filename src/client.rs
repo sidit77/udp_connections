@@ -86,6 +86,10 @@ impl Client {
         matches!(self.state, ClientState::Connected{..})
     }
 
+    pub fn is_disconnected(&self) -> bool {
+        matches!(self.state, ClientState::Disconnected)
+    }
+
     pub fn connect(&mut self, addrs: SocketAddr) {
         self.state = ClientState::Connecting(addrs, Instant::now());
     }
@@ -142,48 +146,48 @@ impl Client {
             return Ok(Some(ClientEvent::Disconnected(reason)));
         }
 
-        match self.socket.recv_from() {
-            Ok((packet, src)) => match self.state {
-                ClientState::Connecting(remote, _) if remote == src => match packet{
-                    Ok(Packet::ConnectionAccepted(id)) => {
-                        self.state = ClientState::Connected(VirtualConnection::new(src, id));
-                        Ok(Some(ClientEvent::Connected(id)))
+        loop {
+            match self.socket.recv_from() {
+                Ok((packet, src)) => match self.state {
+                    ClientState::Connecting(remote, _) if remote == src => match packet{
+                        Ok(Packet::ConnectionAccepted(id)) => {
+                            self.state = ClientState::Connected(VirtualConnection::new(src, id));
+                            return Ok(Some(ClientEvent::Connected(id)))
+                        },
+                        Ok(Packet::ConnectionDenied) => {
+                            self.state = ClientState::Disconnected;
+                            return  Ok(Some(ClientEvent::Disconnected(ClientDisconnectReason::ConnectionDenied)))
+                        }
+                        _ => continue
                     },
-                    Ok(Packet::ConnectionDenied) => {
-                        self.state = ClientState::Disconnected;
-                        Ok(Some(ClientEvent::Disconnected(ClientDisconnectReason::ConnectionDenied)))
-                    }
-                    _ => self.next_event(payload)
-                },
-                ClientState::Connected(ref mut vc) if vc.addrs() == src => match packet{
-                    Ok(Packet::Payload(seq, ack, data)) => {
-                        let seq = vc.handle_seq(seq);
-                        if let SequenceResult::Latest | SequenceResult::Fresh = seq {
+                    ClientState::Connected(ref mut vc) if vc.addrs() == src => match packet{
+                        Ok(Packet::Payload(seq, ack, data)) => {
+                            let seq = vc.handle_seq(seq);
+                            if let SequenceResult::Latest | SequenceResult::Fresh = seq {
+                                vc.on_receive();
+                                vc.handle_ack(ack, |i, j|self.ack_queue.push_back((i, j)));
+                                let result = &mut payload[..data.len()];
+                                result.copy_from_slice(data);
+                                return Ok(Some(ClientEvent::PacketReceived(seq == SequenceResult::Latest, result)))
+                            }
+                        },
+                        Ok(Packet::KeepAlive(ack)) => {
                             vc.on_receive();
                             vc.handle_ack(ack, |i, j|self.ack_queue.push_back((i, j)));
-                            let result = &mut payload[..data.len()];
-                            result.copy_from_slice(data);
-                            Ok(Some(ClientEvent::PacketReceived(seq == SequenceResult::Latest, result)))
-                        } else {
-                            self.next_event(payload)
-                        }
-                    },
-                    Ok(Packet::KeepAlive(ack)) => {
-                        vc.on_receive();
-                        vc.handle_ack(ack, |i, j|self.ack_queue.push_back((i, j)));
-                        self.next_event(payload)
-                    },
-                    Ok(Packet::Disconnect) => {
-                        self.state = ClientState::Disconnected;
-                        Ok(Some(ClientEvent::Disconnected(ClientDisconnectReason::Disconnected)))
-                    },
-                    _ => self.next_event(payload)
+                        },
+                        Ok(Packet::Disconnect) => {
+                            self.state = ClientState::Disconnected;
+                            return Ok(Some(ClientEvent::Disconnected(ClientDisconnectReason::Disconnected)))
+                        },
+                        _ => continue
+                    }
+                    _ => continue
                 }
-                _ => self.next_event(payload)
+                Err(e) if matches!(e.kind(), ErrorKind::WouldBlock) => return Ok(None),
+                Err(e) => return Err(e)
             }
-            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock) => Ok(None),
-            Err(e) => Err(e)
         }
+
     }
 
     pub fn send(&mut self, payload: &[u8]) -> Result<SequenceNumber, ConnectionError> {
