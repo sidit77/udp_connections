@@ -131,13 +131,14 @@ impl VirtualConnection {
         self.received_packets.insert(seq)
     }
 
-    pub(crate) fn handle_ack<F>(&mut self, ack: SequenceNumberSet, mut callback: F) where F: FnMut(SequenceNumber) {
-        for (_seq, _) in self.sent_packets.drain_older(ack.latest().wrapping_sub(PACKET_LOST_CUTOFF)) {
+    pub(crate) fn handle_ack<F>(&mut self, ack: SequenceNumberSet, mut callback: F) where F: FnMut(SequenceNumber, bool) {
+        for (seq, _) in self.sent_packets.drain_older(ack.latest().wrapping_sub(PACKET_LOST_CUTOFF)) {
+            callback(seq, false);
             self.packet_loss = lerp(self.packet_loss, 1., PL_SMOOTHING_FACTOR);
         }
         for seq in ack.iter() {
             if let Some(info) = self.sent_packets.remove(seq) {
-                callback(seq);
+                callback(seq, true);
                 let rtt = info.send_time.elapsed().as_secs_f32();
                 self.rtt = lerp(self.rtt, rtt, RTT_SMOOTHING_FACTOR);
 

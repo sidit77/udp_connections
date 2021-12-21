@@ -21,7 +21,8 @@ pub enum ServerEvent<'a> {
     ClientConnected(u16),
     ClientDisconnected(u16, ServerDisconnectReason),
     PacketReceived(u16, bool, &'a [u8]),
-    PacketAcknowledged(u16, SequenceNumber)
+    PacketAcknowledged(u16, SequenceNumber),
+    PacketLost(u16, SequenceNumber)
 }
 
 #[derive(Debug, Clone)]
@@ -132,7 +133,7 @@ impl ConnectionManager {
 pub struct Server {
     socket: PacketSocket,
     clients: ConnectionManager,
-    ack_queue: VecDeque<(u16, SequenceNumber)>
+    ack_queue: VecDeque<(u16, SequenceNumber, bool)>
 }
 
 
@@ -169,8 +170,11 @@ impl Server {
     }
 
     pub fn next_event<'a>(&mut self, payload: &'a mut [u8]) -> IOResult<Option<ServerEvent<'a>>> {
-        if let Some((client, seq)) = self.ack_queue.pop_front() {
-            return Ok(Some(ServerEvent::PacketAcknowledged(client, seq)))
+        if let Some((client, seq, acked)) = self.ack_queue.pop_front() {
+            match acked {
+                true => return Ok(Some(ServerEvent::PacketAcknowledged(client, seq))),
+                false => return Ok(Some(ServerEvent::PacketLost(client, seq)))
+            }
         }
 
         for (id, client) in self.clients.slots_mut() {
@@ -205,7 +209,7 @@ impl Server {
                         let seq = conn.handle_seq(seq);
                         if let SequenceResult::Latest | SequenceResult::Fresh = seq {
                             let id = conn.id();
-                            conn.handle_ack(ack, |i|self.ack_queue.push_back((id, i)));
+                            conn.handle_ack(ack, |i, acked|self.ack_queue.push_back((id, i, acked)));
                             conn.on_receive();
                             let result = &mut payload[..data.len()];
                             result.copy_from_slice(data);
@@ -220,7 +224,7 @@ impl Server {
                     Some(conn) => {
                         let id = conn.id();
                         conn.on_receive();
-                        conn.handle_ack(ack, |i|self.ack_queue.push_back((id, i)));
+                        conn.handle_ack(ack, |i, acked|self.ack_queue.push_back((id, i, acked)));
                         self.next_event(payload)
                     },
                     None => self.next_event(payload)

@@ -22,7 +22,8 @@ pub enum ClientEvent<'a> {
     Connected(u16),
     Disconnected(ClientDisconnectReason),
     PacketReceived(bool, &'a [u8]),
-    PacketAcknowledged(SequenceNumber)
+    PacketAcknowledged(SequenceNumber),
+    PacketLost(SequenceNumber)
 }
 
 #[derive(Debug, Clone)]
@@ -55,7 +56,7 @@ impl ClientState {
 pub struct Client {
     socket: PacketSocket,
     state: ClientState,
-    ack_queue: VecDeque<SequenceNumber>
+    ack_queue: VecDeque<(SequenceNumber, bool)>
 }
 
 impl Client {
@@ -128,8 +129,11 @@ impl Client {
     }
 
     pub fn next_event<'a>(&mut self, payload: &'a mut [u8]) -> IOResult<Option<ClientEvent<'a>>> {
-        if let Some(seq) = self.ack_queue.pop_front() {
-            return Ok(Some(ClientEvent::PacketAcknowledged(seq)))
+        if let Some((seq, acked)) = self.ack_queue.pop_front() {
+            match acked {
+                true => return Ok(Some(ClientEvent::PacketAcknowledged(seq))),
+                false => return Ok(Some(ClientEvent::PacketLost(seq)))
+            }
         }
 
         if let ClientState::Disconnecting(reason) = &self.state {
@@ -156,7 +160,7 @@ impl Client {
                         let seq = vc.handle_seq(seq);
                         if let SequenceResult::Latest | SequenceResult::Fresh = seq {
                             vc.on_receive();
-                            vc.handle_ack(ack, |i|self.ack_queue.push_back(i));
+                            vc.handle_ack(ack, |i, j|self.ack_queue.push_back((i, j)));
                             let result = &mut payload[..data.len()];
                             result.copy_from_slice(data);
                             Ok(Some(ClientEvent::PacketReceived(seq == SequenceResult::Latest, result)))
@@ -166,7 +170,7 @@ impl Client {
                     },
                     Ok(Packet::KeepAlive(ack)) => {
                         vc.on_receive();
-                        vc.handle_ack(ack, |i|self.ack_queue.push_back(i));
+                        vc.handle_ack(ack, |i, j|self.ack_queue.push_back((i, j)));
                         self.next_event(payload)
                     },
                     Ok(Packet::Disconnect) => {

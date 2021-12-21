@@ -55,6 +55,7 @@ fn client() {
                     //println!("{} got acknowledged", seq);
                     msg_channel.as_mut().unwrap().on_ack(seq);
                 }
+                ClientEvent::PacketLost(_) => {}
             }
         }
 
@@ -125,6 +126,7 @@ fn main(){
                 ServerEvent::PacketAcknowledged(client_id, seq) => {
                     message_channels.get_mut(&client_id).unwrap().on_ack(seq);
                 }
+                ServerEvent::PacketLost(_, _) => {}
             }
         }
 
