@@ -5,9 +5,16 @@ This crates provides the following features:
 
 * Packet filtering - all packets not belonging to a connection are automatically discarded
 * Additional integrity checks using crc32
-* `Connect` / `Disconnect` event for both client and server
+* `Connect` / `Disconnect` events for both client and server
+* `Acknowledge` / `Lost` events for packets
 * Automatic KeepAlive packets on inactivity
+* RoundTripTime and PacketLoss statistics
 
+The following areas need to be improved:
+* The general protocol
+  * Encryption
+  * More secure handshake
+* Packet structs instead of raw byte arrays to reduce copying
 
 
 ## Example
@@ -24,12 +31,12 @@ fn client() {
     let mut socket = UdpClient::new("udp_connections_demo").unwrap();
     let prefix = format!("[Client {}]", socket.local_addr().unwrap());
     println!("{} starting up", prefix);
-    socket.connect(SERVER).unwrap();
+    socket.connect(SERVER);
 
     let mut buffer = [0u8; MAX_PACKET_SIZE];
     let mut i = 0u32;
     'outer: loop {
-        socket.update().unwrap();
+        socket.update();
         while let Some(event) = socket.next_event(&mut buffer).unwrap() {
             match event {
                 ClientEvent::Connected(id) => println!("{} Connected as {}", prefix, id),
@@ -40,16 +47,15 @@ fn client() {
                 ClientEvent::Packet(mut payload) => {
                     let val = payload.read_u32::<BigEndian>().unwrap();
                     println ! ("{} Packet {}", prefix, val);
-                }
+                },
+                ClientEvent::PacketAcknowledged(_) => { },
+                ClientEvent::PacketLost(_) => {}
             }
         }
 
         if socket.is_connected() {
             if i % 10 == 0 {
                 socket.send(&(i / 10).to_be_bytes()).unwrap();
-                //if i > 60 {
-                //    socket.disconnect().unwrap();
-                //}
             }
             i += 1;
         }
@@ -72,7 +78,7 @@ fn main(){
 
     let mut buffer = [0u8; MAX_PACKET_SIZE];
     loop {
-        socket.update().unwrap();
+        socket.update();
         while let Some(event) = socket.next_event(&mut buffer).unwrap() {
             match event {
                 ServerEvent::ClientConnected(client_id) =>
@@ -83,7 +89,9 @@ fn main(){
                     let val = payload.read_u32::<BigEndian>().unwrap();
                     println!("{} Packet {} from {}", prefix, val, client_id);
                     socket.send(client_id, &val.to_be_bytes()).unwrap();
-                }
+                },
+                ServerEvent::PacketAcknowledged(_, _) => { }
+                ServerEvent::PacketLost(_, _) => {}
             }
         }
         std::thread::sleep(Duration::from_secs_f32(0.05));
