@@ -111,7 +111,6 @@ pub struct SequenceBuffer2<T: Clone + Default> {
 }
 
 impl<T: Clone + Default> SequenceBuffer2<T> {
-    /// Creates a SequenceBuffer with a desired capacity.
     pub fn with_capacity(size: u16) -> Self {
         Self {
             sequence_num: 0,
@@ -120,24 +119,7 @@ impl<T: Clone + Default> SequenceBuffer2<T> {
         }
     }
 
-    /// Returns the most recently stored sequence number.
-    pub fn sequence_num(&self) -> SequenceNumber {
-        self.sequence_num
-    }
-
-    /// Returns a mutable reference to the entry with the given sequence number.
-    pub fn get_mut(&mut self, sequence_num: SequenceNumber) -> Option<&mut T> {
-        if self.exists(sequence_num) {
-            let index = self.index(sequence_num);
-            return Some(&mut self.entries[index]);
-        }
-        None
-    }
-
-    /// Inserts the entry data into the sequence buffer. If the requested sequence number is "too
-    /// old", the entry will not be inserted and no reference will be returned.
     pub fn insert(&mut self, sequence_num: SequenceNumber, entry: T) -> Option<&mut T> {
-        // sequence number is too old to insert into the buffer
         if sequence_less_than(
             sequence_num,
             self.sequence_num
@@ -154,7 +136,6 @@ impl<T: Clone + Default> SequenceBuffer2<T> {
         Some(&mut self.entries[index])
     }
 
-    /// Returns whether or not we have previously inserted an entry for the given sequence number.
     pub fn exists(&self, sequence_num: SequenceNumber) -> bool {
         let index = self.index(sequence_num);
         if let Some(s) = self.entry_sequences[index] {
@@ -163,7 +144,6 @@ impl<T: Clone + Default> SequenceBuffer2<T> {
         false
     }
 
-    /// Removes an entry from the sequence buffer
     pub fn remove(&mut self, sequence_num: SequenceNumber) -> Option<T> {
         if self.exists(sequence_num) {
             let index = self.index(sequence_num);
@@ -174,7 +154,6 @@ impl<T: Clone + Default> SequenceBuffer2<T> {
         None
     }
 
-    // Advances the sequence number while removing older entries.
     fn advance_sequence(&mut self, sequence_num: SequenceNumber) {
         if sequence_greater_than(sequence_num.wrapping_add(1), self.sequence_num) {
             self.remove_entries(u32::from(sequence_num));
@@ -200,7 +179,6 @@ impl<T: Clone + Default> SequenceBuffer2<T> {
         }
     }
 
-    // Generates an index for use in `entry_sequences` and `entries`.
     fn index(&self, sequence: SequenceNumber) -> usize {
         sequence as usize % self.entry_sequences.len()
     }
