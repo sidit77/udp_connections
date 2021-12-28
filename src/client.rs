@@ -96,10 +96,17 @@ impl Client {
 
     pub fn disconnect(&mut self) -> Result<(), ConnectionError> {
         let connection = self.state.get_connection_mut()?;
-        for _ in 0..10 {
-            self.socket.send_with (Packet::Disconnect, connection)?;
-        }
-        self.state = ClientState::Disconnecting(ClientDisconnectReason::Disconnected);
+        let mut attempts = 10;
+        let reason = loop {
+            match self.socket.send_with (Packet::Disconnect, connection) {
+                Ok(_) => match attempts {
+                    0 | 1 => break ClientDisconnectReason::Disconnected,
+                    _ => attempts -= 1
+                },
+                Err(e) => break ClientDisconnectReason::SocketError(e.kind())
+            }
+        };
+        self.state = ClientState::Disconnecting(reason);
         Ok(())
     }
 
@@ -192,7 +199,13 @@ impl Client {
 
     pub fn send(&mut self, payload: &[u8]) -> Result<SequenceNumber, ConnectionError> {
         let connection = self.state.get_connection_mut()?;
-        Ok(self.socket.send_payload(payload, connection)?)
+        match self.socket.send_payload(payload, connection) {
+            Ok(seq) => Ok(seq),
+            Err(err) => {
+                self.state = ClientState::Disconnecting(ClientDisconnectReason::SocketError(err.kind()));
+                Err(ConnectionError::Disconnected)
+            }
+        }
     }
 
 }

@@ -238,16 +238,29 @@ impl Server {
 
     pub fn send(&mut self, client_id: u16, payload: &[u8]) -> Result<SequenceNumber, ConnectionError> {
         let connection = self.clients.get_connection_mut(client_id)?;
-        Ok(self.socket.send_payload(payload, connection)?)
+        match self.socket.send_payload(payload, connection) {
+            Ok(seq) => Ok(seq),
+            Err(err) => {
+                self.clients.set(client_id, ClientState::Disconnecting(ServerDisconnectReason::SocketError(err.kind())));
+                Err(ConnectionError::Disconnected)
+            }
+        }
     }
 
     pub fn disconnect(&mut self, client_id: u16) -> Result<(), ConnectionError> {
         let connection = self.clients.get_connection_mut(client_id)?;
-        for _ in 0..10 {
-            self.socket.send_with(Packet::Disconnect, connection)?
-        }
+        let mut attempts = 10;
+        let reason = loop {
+            match self.socket.send_with (Packet::Disconnect, connection) {
+                Ok(_) => match attempts {
+                    0 | 1 => break ServerDisconnectReason::Disconnected,
+                    _ => attempts -= 1
+                },
+                Err(e) => break ServerDisconnectReason::SocketError(e.kind())
+            }
+        };
         let id = connection.id();
-        self.clients.set(id, ClientState::Disconnecting(ServerDisconnectReason::Disconnected));
+        self.clients.set(id, ClientState::Disconnecting(reason));
         Ok(())
     }
 
