@@ -120,7 +120,7 @@ impl VirtualConnection {
     }
 
     pub fn last_packet_received(&self) -> Duration {
-        self.last_sent_packet.elapsed()
+        self.last_received_packet.elapsed()
     }
 
     pub(crate) fn on_receive(&mut self) {
